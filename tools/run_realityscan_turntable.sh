@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 [--align-only] [--dry-run] DATASET [OUTPUT.glb]"
+    echo "Usage: $0 [--align-only|--resume] [--dry-run] DATASET [OUTPUT.glb]"
 }
 
 mode="reconstruct"
@@ -11,6 +11,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --align-only)
             mode="align"
+            shift
+            ;;
+        --resume)
+            mode="resume"
             shift
             ;;
         --dry-run)
@@ -90,27 +94,42 @@ command=(
     realityscan-cli
     -headless
     -silent "$wine_crash_report"
-    -newScene
     -set "appQuitOnError=true"
     -set "suppressErrors=true"
-    -set "appIncSubdirs=true"
-    -set "sfmFeatureDetectionQuality=High"
-    -set "sfmImagesOverlap=High"
-    -set "sfmImageDownscaleFactor=1"
-    -set "sfmMaxFeatureReprojectionError=2.0"
-    -set "sfmDetectorSensitivity=High"
-    -set "MvsGeometryGpuAccel=true"
-    -addFolder "$wine_layers"
-    -selectAllImages
-    -setConstantCalibrationGroups
-    -editInputSelection "inpMaskOpts=3"
-    -align
-    -selectMaximalComponent
-    -setReconstructionRegionAuto
-    -save "$wine_project"
 )
 
-if [[ "$mode" == "reconstruct" ]]; then
+if [[ "$mode" == "resume" ]]; then
+    if [[ ! -s "$project" ]]; then
+        echo "Cannot resume because the RealityScan project does not exist: $project" >&2
+        exit 1
+    fi
+    command+=(
+        -load "$wine_project"
+        -selectMaximalComponent
+        -setReconstructionRegionAuto
+    )
+else
+    command+=(
+        -newScene
+        -set "appIncSubdirs=true"
+        -set "sfmFeatureDetectionQuality=High"
+        -set "sfmImagesOverlap=High"
+        -set "sfmImageDownscaleFactor=1"
+        -set "sfmMaxFeatureReprojectionError=2.0"
+        -set "sfmDetectorSensitivity=High"
+        -set "MvsGeometryGpuAccel=true"
+        -addFolder "$wine_layers"
+        -selectAllImages
+        -setConstantCalibrationGroups
+        -editInputSelection "inpMaskOpts=3"
+        -align
+        -selectMaximalComponent
+        -setReconstructionRegionAuto
+        -save "$wine_project"
+    )
+fi
+
+if [[ "$mode" != "align" ]]; then
     command+=(
         -calculateNormalModel
         -calculateTexture
@@ -133,12 +152,12 @@ if [[ ! -s "$project" ]]; then
     echo "RealityScan did not create the expected project: $project" >&2
     exit 1
 fi
-if [[ "$mode" == "reconstruct" && ! -s "$export_path" ]]; then
+if [[ "$mode" != "align" && ! -s "$export_path" ]]; then
     echo "RealityScan did not create the expected GLB: $export_path" >&2
     exit 1
 fi
 
 echo "RealityScan project: $project"
-if [[ "$mode" == "reconstruct" ]]; then
+if [[ "$mode" != "align" ]]; then
     echo "RealityScan model: $export_path"
 fi

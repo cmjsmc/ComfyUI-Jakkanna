@@ -68,7 +68,7 @@ class RealityScanImageSetTests(unittest.TestCase):
             HEIGHT = 2
 
         images = torch.ones((81, 2, 8, 3), dtype=torch.float32)
-        masks = torch.zeros((81, 1, 2, 8), dtype=torch.bool)
+        masks = torch.zeros((81, 1, 4, 8), dtype=torch.bool)
         masks[:, :, :, :4] = True
         report = json.dumps({"frames": 81, "objects": 1})
 
@@ -76,7 +76,7 @@ class RealityScanImageSetTests(unittest.TestCase):
             self.realityscan.folder_paths.get_output_directory = lambda: output
             root, manifest_path = TinyImageSetSave().save(
                 images,
-                {"packed_masks": pack_masks(masks)},
+                {"packed_masks": pack_masks(masks), "orig_size": (2, 8)},
                 report,
                 81,
                 "Jakkanna/RealityScan/test",
@@ -98,6 +98,26 @@ class RealityScanImageSetTests(unittest.TestCase):
             self.assertEqual(manifest["frame_count"], 81)
             self.assertFalse(manifest["duplicate_endpoint"])
             self.assertAlmostEqual(manifest["frames"][-1]["turntable_angle_degrees"], 80 * 360 / 81)
+            self.assertEqual(manifest["sam3_native_mask_height"], 4)
+            self.assertEqual(manifest["sam3_native_mask_width"], 8)
+
+    def test_rejects_track_for_a_different_frame_size(self):
+        class TinyImageSetSave(self.realityscan.JakkannaRealityScanImageSetSave):
+            WIDTH = 8
+            HEIGHT = 2
+
+        images = torch.ones((81, 2, 8, 3), dtype=torch.float32)
+        masks = torch.ones((81, 1, 2, 8), dtype=torch.bool)
+        report = json.dumps({"frames": 81, "objects": 1})
+
+        with self.assertRaisesRegex(ValueError, "original frame size"):
+            TinyImageSetSave().save(
+                images,
+                {"packed_masks": pack_masks(masks), "orig_size": (4, 8)},
+                report,
+                81,
+                "Jakkanna/RealityScan/test",
+            )
 
     def test_rejects_noncanonical_frame_count_before_writing(self):
         with self.assertRaisesRegex(ValueError, "exactly 81"):

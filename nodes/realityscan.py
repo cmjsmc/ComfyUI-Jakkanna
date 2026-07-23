@@ -6,6 +6,7 @@ import re
 
 import cv2
 import torch
+import torch.nn.functional as F
 
 import folder_paths
 from comfy.ldm.sam3.tracker import unpack_masks
@@ -97,6 +98,13 @@ class JakkannaRealityScanImageSetSave:
                 f"got {objects} subjects across {frames} frames"
             )
 
+        orig_size = track_data.get("orig_size")
+        if not isinstance(orig_size, (tuple, list)) or tuple(orig_size) != (self.HEIGHT, self.WIDTH):
+            raise ValueError(
+                f"SAM 3.1 original frame size must be {self.WIDTH}x{self.HEIGHT}; "
+                f"got {orig_size}"
+            )
+
         try:
             parsed_track_report = json.loads(track_report)
         except (TypeError, ValueError):
@@ -104,18 +112,24 @@ class JakkannaRealityScanImageSetSave:
         if parsed_track_report.get("frames") != self.FRAME_COUNT or parsed_track_report.get("objects") != 1:
             raise ValueError("Validated SAM 3.1 track report does not describe the required 81-frame single-subject track")
 
+        native_mask_height = packed.shape[-2]
+        native_mask_width = packed.shape[-1] * 8
+        projected_masks = []
         mask_areas = []
         for index in range(self.FRAME_COUNT):
-            mask = unpack_masks(packed[index:index + 1])[0, 0]
-            if mask.shape != (self.HEIGHT, self.WIDTH):
-                raise ValueError(
-                    f"SAM 3.1 mask {index} is {mask.shape[1]}x{mask.shape[0]}; "
-                    f"expected {self.WIDTH}x{self.HEIGHT}"
+            mask = unpack_masks(packed[index:index + 1]).float()
+            if mask.shape[-2:] != (self.HEIGHT, self.WIDTH):
+                mask = F.interpolate(
+                    mask,
+                    size=(self.HEIGHT, self.WIDTH),
+                    mode="bilinear",
+                    align_corners=False,
                 )
-            mask = mask.detach().to(device="cpu").numpy()
+            mask = (mask[0, 0] > 0.5).detach().to(device="cpu").numpy()
             area_pixels = int(mask.sum())
             if area_pixels == 0:
                 raise ValueError(f"SAM 3.1 final track is empty on frame {index}")
+            projected_masks.append(mask)
             mask_areas.append(area_pixels)
 
         root = _dataset_root(dataset_prefix)
@@ -127,7 +141,7 @@ class JakkannaRealityScanImageSetSave:
 
         frames = []
         for index in range(self.FRAME_COUNT):
-            mask = unpack_masks(packed[index:index + 1])[0, 0].detach().to(device="cpu").numpy()
+            mask = projected_masks[index]
             rgb = images[index, :, :, :3].detach().to(device="cpu", dtype=torch.float32)
             if not torch.isfinite(rgb).all():
                 raise ValueError(f"RealityScan image frame {index} contains non-finite pixels")
@@ -166,6 +180,9 @@ class JakkannaRealityScanImageSetSave:
             "turntable_step_degrees": 360.0 / self.FRAME_COUNT,
             "duplicate_endpoint": False,
             "background": "black outside the binary SAM 3.1 mask",
+            "sam3_native_mask_width": native_mask_width,
+            "sam3_native_mask_height": native_mask_height,
+            "sam3_mask_projection": "bilinear resize to original frame size, thresholded at 0.5",
             "track_report": parsed_track_report,
             "frames": frames,
         }
