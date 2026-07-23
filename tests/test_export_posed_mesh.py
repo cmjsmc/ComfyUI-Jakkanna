@@ -98,6 +98,42 @@ class ExportTransformTests(unittest.TestCase):
         self.assertEqual(joints["Root"]["head"], [1.0, 0.0, 0.0])
         self.assertEqual(joints["Root"]["tail"], [1.0, 2.0, 0.0])
 
+    def test_capture_dump_uses_pose_camera_override_and_output_scale(self):
+        metadata = EXPORTER._capture_dump(
+            {
+                "export": {
+                    "view_width": 704,
+                    "view_height": 1280,
+                    "cam_zoom": 1.0,
+                    "cam_offset_x": 3.0,
+                    "cam_offset_y": -2.0,
+                    "cam_yaw_deg": 5.0,
+                    "cam_pitch_deg": -4.0,
+                },
+            },
+            {
+                "modelRotation": [1.0, 2.0, 3.0],
+                "cameraParams": {
+                    "zoom": 1.5,
+                    "offset_x": 4.0,
+                    "yaw_deg": 10.0,
+                },
+            },
+            np.asarray([[-10, -20, -30], [30, 40, 50]], dtype=np.float64),
+            0.1,
+        )
+
+        self.assertEqual(metadata["mesh_center"], [1.0, 1.0, 1.0])
+        self.assertEqual(metadata["model_rotation_degrees"], [1.0, 2.0, 3.0])
+        self.assertEqual(metadata["capture"]["width"], 704)
+        self.assertEqual(metadata["capture"]["height"], 1280)
+        self.assertEqual(metadata["capture"]["offset_x"], 0.4)
+        self.assertEqual(metadata["capture"]["offset_y"], -0.2)
+        self.assertEqual(metadata["capture"]["yaw_degrees"], 10.0)
+        self.assertEqual(metadata["capture"]["pitch_degrees"], -4.0)
+        self.assertEqual(metadata["capture"]["distance"], 4.5)
+        self.assertEqual(metadata["capture"]["zoom"], 1.5)
+
     def test_glb_vertices_are_exported_in_meters(self):
         try:
             import trimesh
