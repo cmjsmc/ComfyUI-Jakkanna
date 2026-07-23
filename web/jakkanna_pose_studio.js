@@ -3656,6 +3656,12 @@ class PoseStudioWidget {
         };
         this.refBtn = refBtn;
 
+        const turntableBtn = document.createElement("button");
+        turntableBtn.className = "jakkanna-ps-btn";
+        turntableBtn.innerHTML = '<span class="jakkanna-ps-btn-icon">↻</span> 81-view Turntable';
+        turntableBtn.title = "Repeat the current fixed pose at 81 evenly spaced angles for SCAIL-2 and RealityScan";
+        turntableBtn.addEventListener("click", () => this.createRealityScanTurntable());
+
         const settingsBtn = document.createElement("button");
         settingsBtn.className = "jakkanna-ps-btn";
         settingsBtn.innerHTML = '<span class="jakkanna-ps-btn-icon">⚙️</span>';
@@ -3666,6 +3672,7 @@ class PoseStudioWidget {
         footer.appendChild(exportBtn);
         footer.appendChild(importBtn);
         footer.appendChild(refBtn);
+        footer.appendChild(turntableBtn);
         footer.appendChild(settingsBtn);
 
         centerPanel.appendChild(actions);
@@ -5947,6 +5954,68 @@ class PoseStudioWidget {
             this.updateCaptureCameraPreview();
         }
         this.syncToNode();
+    }
+
+    createRealityScanTurntable() {
+        if (!this.viewer || !this.viewer.isInitialized()) {
+            this.showMessage("Pose viewer is not ready.", true);
+            return false;
+        }
+
+        const frameCount = 81;
+        const fps = 16;
+        const basePose = this.viewer.getPose();
+        basePose.cameraParams = this.currentCameraParams();
+        basePose.prompt = this.getPosePrompt(this.activeTab);
+        const baseRotation = Array.isArray(basePose.modelRotation)
+            ? basePose.modelRotation.map(value => Number(value) || 0)
+            : [0, 0, 0];
+        const prompt = basePose.prompt || "";
+
+        this.exportParams.view_width = 704;
+        this.exportParams.view_height = 1280;
+        this.exportParams.output_mode = "LIST";
+        this.exportParams.animation_frames = frameCount;
+        this.exportParams.animation_fps = fps;
+        this.exportParams.animation_start_seconds = 0;
+        this.exportParams.animation_timing = "REALTIME";
+        this.exportParams.bg_color = [0, 0, 0];
+        this.exportParams.debugMode = false;
+        this.exportParams.background_url = null;
+
+        this.poses = Array.from({ length: frameCount }, (_unused, index) => {
+            const pose = JSON.parse(JSON.stringify(basePose));
+            pose.modelRotation = [baseRotation[0], baseRotation[1] + index * 360 / frameCount, baseRotation[2]];
+            return pose;
+        });
+        this.posePrompts = Array(frameCount).fill(prompt);
+        this.poseCaptures = Array(frameCount).fill(null);
+        this.poseOpenPoseKeypoints = Array(frameCount).fill(null);
+        this.lightingPrompts = Array(frameCount).fill("");
+        this.activeTab = 0;
+        this.setAnimationMetadata({
+            source_format: "Jakkanna RealityScan turntable",
+            sampled_frames: frameCount,
+            sample_times_seconds: Array.from({ length: frameCount }, (_unused, index) => index / fps),
+            sample_interval_seconds: 1 / fps,
+            timing_mode: "REALTIME",
+            turntable_degrees: 360,
+            turntable_step_degrees: 360 / frameCount,
+            duplicate_endpoint: false,
+        });
+
+        this.clearSAMCameraMode();
+        this.viewer.setPose(this.poses[0], true);
+        this.syncCameraWidgets();
+        this.updateCaptureCameraPreview();
+        this.updateRotationSliders();
+        this.updateTabs();
+        this.syncPromptFieldToActiveTab();
+        const captured = this.syncToNode(true);
+        if (captured) {
+            this.showMessage("Created 81 fixed-pose turntable views at 704×1280.");
+        }
+        return captured;
     }
 
     showExportModal() {

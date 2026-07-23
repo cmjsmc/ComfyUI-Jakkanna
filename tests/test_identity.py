@@ -16,6 +16,7 @@ REGISTERED_NODE_MAPPINGS = {
     "VNCCS_ModelSelector": "JakkannaModelSelector",
     "VNCCS_PoseStudio": "JakkannaPoseStudio",
     "JakkannaPromptFromList": "JakkannaPromptFromList",
+    "JakkannaRealityScanImageSetSave": "JakkannaRealityScanImageSetSave",
     "JakkannaSCAIL2FlowUniPC": "JakkannaSCAIL2FlowUniPC",
     "JakkannaSCAIL2ProductionInputValidate": "JakkannaSCAIL2ProductionInputValidate",
     "JakkannaSCAIL2ProductionManifest": "JakkannaSCAIL2ProductionManifest",
@@ -184,6 +185,38 @@ class IdentityBoundaryTests(unittest.TestCase):
             serialized = json.dumps(workflow)
             self.assertNotIn("experiments/scail_jakkanna", serialized, filename)
             self.assertNotIn("/home/", serialized, filename)
+
+    def test_realityscan_workflows_use_fixed_pose_replacement_and_final_masks(self):
+        filenames = (
+            "Jakkanna Krea 2 SCAIL 2 RealityScan Fast.json",
+            "Jakkanna Krea 2 SCAIL 2 RealityScan Production.json",
+        )
+
+        for filename in filenames:
+            with open(os.path.join(ROOT, "workflows", filename), "r", encoding="utf-8") as handle:
+                workflow = json.load(handle)
+
+            by_type = {}
+            for node in workflow["nodes"]:
+                by_type.setdefault(node["type"], []).append(node)
+
+            pose_data = json.loads(by_type["VNCCS_PoseStudio"][0]["widgets_values"][0])
+            self.assertEqual(pose_data["export"]["view_width"], 704, filename)
+            self.assertEqual(pose_data["export"]["view_height"], 1280, filename)
+            self.assertEqual(pose_data["export"]["animation_frames"], 81, filename)
+            self.assertEqual(pose_data["export"]["animation_fps"], 16, filename)
+            self.assertEqual(pose_data["export"]["animation_timing"], "REALTIME", filename)
+            self.assertEqual(pose_data["export"]["bg_color"], [0, 0, 0], filename)
+
+            self.assertTrue(by_type["WanSCAILToVideo"][0]["widgets_values"][-1], filename)
+            self.assertTrue(by_type["SCAIL2ColoredMask"][0]["widgets_values"][-1], filename)
+            self.assertEqual(len(by_type["SAM3_VideoTrack"]), 2, filename)
+            self.assertEqual(len(by_type["JakkannaSCAIL2TrackValidate"]), 2, filename)
+            self.assertEqual(len(by_type["JakkannaRealityScanImageSetSave"]), 1, filename)
+
+            exporter = by_type["JakkannaRealityScanImageSetSave"][0]
+            self.assertTrue(all(item["link"] is not None for item in exporter["inputs"]), filename)
+            self.assertNotIn("/home/", json.dumps(workflow), filename)
 
     def test_scail2_release_dependencies_are_declared(self):
         with open(os.path.join(ROOT, "pyproject.toml"), "rb") as handle:

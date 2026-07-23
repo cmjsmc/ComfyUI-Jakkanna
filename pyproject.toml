@@ -51,6 +51,7 @@ NodeIds = [
     "VNCCS_ModelSelector",
     "VNCCS_PoseStudio",
     "JakkannaPromptFromList",
+    "JakkannaRealityScanImageSetSave",
     "JakkannaSCAIL2FlowUniPC",
     "JakkannaSCAIL2ProductionInputValidate",
     "JakkannaSCAIL2ProductionManifest",

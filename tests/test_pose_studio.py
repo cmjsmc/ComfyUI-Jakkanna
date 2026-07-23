@@ -536,6 +536,18 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("this.invalidateAnimationMetadata();", studio)
         self.assertIn("if (!this.animationMetadata)", studio)
 
+    def test_pose_studio_builds_realityscan_turntable_without_duplicate_endpoint(self):
+        with open(os.path.join(ROOT, "web", "jakkanna_pose_studio.js"), "r", encoding="utf-8") as handle:
+            studio = handle.read()
+
+        self.assertIn("createRealityScanTurntable()", studio)
+        self.assertIn("const frameCount = 81;", studio)
+        self.assertIn("index * 360 / frameCount", studio)
+        self.assertIn("duplicate_endpoint: false", studio)
+        self.assertIn("this.exportParams.view_width = 704;", studio)
+        self.assertIn("this.exportParams.view_height = 1280;", studio)
+        self.assertIn("this.exportParams.bg_color = [0, 0, 0];", studio)
+
     def test_frontend_openpose_uses_face_landmarks(self):
         with open(os.path.join(ROOT, "web", "jakkanna_pose_studio_core.js"), "r", encoding="utf-8") as handle:
             core = handle.read()
