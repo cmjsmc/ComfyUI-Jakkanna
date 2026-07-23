@@ -173,6 +173,22 @@ Use `--all` to export every pose and `--triangulate` when the downstream tool
 requires triangles. GLB export uses the `trimesh` dependency installed with
 Jakkanna.
 
+### SCAIL Turntable Asset
+
+The RealityScan Fast and Production workflows can bake their 81 SCAIL-2
+replacement frames directly onto the clean posed mannequin:
+
+```bash
+tools/run_scail_proxy_asset.sh saved-workflow.json \
+  /path/to/Jakkanna/RealityScan/fast/run_00001
+```
+
+The tool rebuilds pose 0 and its exact Pose Studio camera, rejects
+self-occluded samples, locally aligns the generated masks, and writes
+`JakkannaSCAILProxy.glb` with a 2048-pixel unlit texture. Use
+`--texture-size 512` for quick tests. RealityScan alignment is optional
+validation; unrestricted photogrammetry is not used as the asset geometry.
+
 ## Jakkanna Pose Studio
 
 <p align="center">
