@@ -179,6 +179,11 @@ class JakkannaRealityScanImageSetSave:
             "turntable_degrees": 360,
             "turntable_step_degrees": 360.0 / self.FRAME_COUNT,
             "duplicate_endpoint": False,
+            "realityscan_camera_priors": {
+                "type": "position",
+                "circle_radius_meters": 4.5,
+                "circle_height_meters": 1.0,
+            },
             "background": "black outside the binary SAM 3.1 mask",
             "sam3_native_mask_width": native_mask_width,
             "sam3_native_mask_height": native_mask_height,

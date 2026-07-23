@@ -98,6 +98,7 @@ class RealityScanImageSetTests(unittest.TestCase):
             self.assertEqual(manifest["frame_count"], 81)
             self.assertFalse(manifest["duplicate_endpoint"])
             self.assertAlmostEqual(manifest["frames"][-1]["turntable_angle_degrees"], 80 * 360 / 81)
+            self.assertEqual(manifest["realityscan_camera_priors"]["circle_radius_meters"], 4.5)
             self.assertEqual(manifest["sam3_native_mask_height"], 4)
             self.assertEqual(manifest["sam3_native_mask_width"], 8)
 
