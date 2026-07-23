@@ -145,7 +145,7 @@ if [[ "$mode" != "resume" ]]; then
         -selectMaximalComponent
         -setReconstructionRegionAuto
         -save "$wine_project"
-        -printReport 'JAKKANNA_REGISTERED_CAMERAS=$(cameraCount)'
+        -printReport 'JAKKANNA_REGISTERED_CAMERAS=$(cameraCount)$[n]'
         -quit
     )
 else
@@ -156,7 +156,7 @@ else
     alignment_command+=(
         -load "$wine_project"
         -selectMaximalComponent
-        -printReport 'JAKKANNA_REGISTERED_CAMERAS=$(cameraCount)'
+        -printReport 'JAKKANNA_REGISTERED_CAMERAS=$(cameraCount)$[n]'
         -quit
     )
 fi
