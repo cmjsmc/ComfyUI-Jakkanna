@@ -20,6 +20,7 @@ REGISTERED_NODE_MAPPINGS = {
     "JakkannaSCAIL2FlowUniPC": "JakkannaSCAIL2FlowUniPC",
     "JakkannaSCAIL2ProductionInputValidate": "JakkannaSCAIL2ProductionInputValidate",
     "JakkannaSCAIL2ProductionManifest": "JakkannaSCAIL2ProductionManifest",
+    "JakkannaSCAIL2PreparedTrackValidate": "JakkannaSCAIL2PreparedTrackValidate",
     "JakkannaSCAIL2ReferencePNG16Save": "JakkannaSCAIL2ReferencePNG16Save",
     "JakkannaSCAIL2SingleSubjectMask": "JakkannaSCAIL2SingleSubjectMask",
     "JakkannaSCAIL2TrackValidate": "JakkannaSCAIL2TrackValidate",

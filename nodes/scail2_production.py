@@ -164,6 +164,12 @@ _GRAPH_SETTING_INPUTS = {
         "minimum_adjacent_iou",
         "minimum_border_margin",
     ),
+    "JakkannaSCAIL2PreparedTrackValidate": (
+        "maximum_area_step_ratio",
+        "maximum_centroid_jump",
+        "minimum_adjacent_iou",
+        "minimum_border_margin",
+    ),
 }
 
 
@@ -407,6 +413,84 @@ class JakkannaSCAIL2ReferencePNG16Save:
         return {"ui": {"images": results}, "result": (_json(report),)}
 
 
+def _track_metrics(masks):
+    areas = masks.sum(dim=(-1, -2)).float()
+    if (areas == 0).any():
+        return {"areas": areas, "empty_frames": (areas == 0).nonzero(as_tuple=True)[0].tolist()}
+
+    smaller = torch.minimum(areas[:-1], areas[1:]).clamp(min=1)
+    larger = torch.maximum(areas[:-1], areas[1:])
+    height, width = masks.shape[-2:]
+    grid_y = torch.arange(height, device=masks.device, dtype=torch.float32).view(1, height, 1)
+    grid_x = torch.arange(width, device=masks.device, dtype=torch.float32).view(1, 1, width)
+    centroids_y = (masks * grid_y).sum(dim=(-1, -2)) / areas
+    centroids_x = (masks * grid_x).sum(dim=(-1, -2)) / areas
+    dx = (centroids_x[1:] - centroids_x[:-1]) / width
+    dy = (centroids_y[1:] - centroids_y[:-1]) / height
+
+    intersections = (masks[:-1] & masks[1:]).sum(dim=(-1, -2)).float()
+    unions = (masks[:-1] | masks[1:]).sum(dim=(-1, -2)).float().clamp(min=1)
+    occupied_rows = masks.any(dim=2)
+    occupied_columns = masks.any(dim=1)
+    top = occupied_rows.float().argmax(dim=1)
+    bottom = height - 1 - occupied_rows.flip(1).float().argmax(dim=1)
+    left = occupied_columns.float().argmax(dim=1)
+    right = width - 1 - occupied_columns.flip(1).float().argmax(dim=1)
+    border_margins = torch.stack((
+        top / height,
+        (height - 1 - bottom) / height,
+        left / width,
+        (width - 1 - right) / width,
+    ), dim=1)
+    return {
+        "areas": areas,
+        "empty_frames": [],
+        "maximum_adjacent_area_ratio": float((larger / smaller).max().item()),
+        "maximum_centroid_jump": float(torch.sqrt(dx.square() + dy.square()).max().item()),
+        "minimum_adjacent_iou": float((intersections / unions).min().item()),
+        "frame_border_margin": border_margins.min(dim=1).values,
+    }
+
+
+def _validate_track_metrics(
+    metrics,
+    source,
+    maximum_area_step_ratio,
+    maximum_centroid_jump,
+    minimum_adjacent_iou,
+    minimum_border_margin,
+):
+    if metrics["empty_frames"]:
+        raise ValueError(f"{source} track is empty on frames {metrics['empty_frames']}")
+    max_area_step = metrics["maximum_adjacent_area_ratio"]
+    max_jump = metrics["maximum_centroid_jump"]
+    min_iou = metrics["minimum_adjacent_iou"]
+    frame_border_margin = metrics["frame_border_margin"]
+    min_border = float(frame_border_margin.min().item())
+    if max_area_step > maximum_area_step_ratio:
+        raise ValueError(
+            f"{source} track area changes by {max_area_step:.3f}x between adjacent frames; "
+            f"limit is {maximum_area_step_ratio:.3f}x"
+        )
+    if max_jump > maximum_centroid_jump:
+        raise ValueError(
+            f"{source} track centroid jumps {max_jump:.3f} frame diagonals; "
+            f"limit is {maximum_centroid_jump:.3f}"
+        )
+    if min_iou < minimum_adjacent_iou:
+        raise ValueError(
+            f"{source} minimum adjacent-frame IoU is {min_iou:.4f}; "
+            f"minimum is {minimum_adjacent_iou:.4f}"
+        )
+    if min_border < minimum_border_margin:
+        clipped = (frame_border_margin < minimum_border_margin).nonzero(as_tuple=True)[0].tolist()
+        raise ValueError(
+            f"{source} subject is within {minimum_border_margin:.3f} of the canvas edge "
+            f"on frames {clipped}"
+        )
+    return max_area_step, max_jump, min_iou, min_border
+
+
 
 class JakkannaSCAIL2TrackValidate:
     @classmethod
@@ -447,66 +531,17 @@ class JakkannaSCAIL2TrackValidate:
             raise ValueError(f"SAM 3.1 track must contain exactly one subject, got {packed.shape[1]}")
 
         masks = unpack_masks(packed)[:, 0].bool()
-        areas = masks.sum(dim=(-1, -2)).float()
-        if (areas == 0).any():
-            empty = (areas == 0).nonzero(as_tuple=True)[0].tolist()
-            raise ValueError(f"SAM 3.1 source track is empty on frames {empty}")
-
-        smaller = torch.minimum(areas[:-1], areas[1:]).clamp(min=1)
-        larger = torch.maximum(areas[:-1], areas[1:])
-        area_step_ratio = larger / smaller
-
+        metrics = _track_metrics(masks)
+        areas = metrics["areas"]
         height, width = masks.shape[-2:]
-        grid_y = torch.arange(height, device=masks.device, dtype=torch.float32).view(1, height, 1)
-        grid_x = torch.arange(width, device=masks.device, dtype=torch.float32).view(1, 1, width)
-        centroids_y = (masks * grid_y).sum(dim=(-1, -2)) / areas
-        centroids_x = (masks * grid_x).sum(dim=(-1, -2)) / areas
-        dx = (centroids_x[1:] - centroids_x[:-1]) / width
-        dy = (centroids_y[1:] - centroids_y[:-1]) / height
-        centroid_jump = torch.sqrt(dx.square() + dy.square())
-
-        intersections = (masks[:-1] & masks[1:]).sum(dim=(-1, -2)).float()
-        unions = (masks[:-1] | masks[1:]).sum(dim=(-1, -2)).float().clamp(min=1)
-        adjacent_iou = intersections / unions
-        occupied_rows = masks.any(dim=2)
-        occupied_columns = masks.any(dim=1)
-        top = occupied_rows.float().argmax(dim=1)
-        bottom = height - 1 - occupied_rows.flip(1).float().argmax(dim=1)
-        left = occupied_columns.float().argmax(dim=1)
-        right = width - 1 - occupied_columns.flip(1).float().argmax(dim=1)
-        border_margins = torch.stack((
-            top / height,
-            (height - 1 - bottom) / height,
-            left / width,
-            (width - 1 - right) / width,
-        ), dim=1)
-        frame_border_margin = border_margins.min(dim=1).values
-
-        max_area_step = float(area_step_ratio.max().item())
-        max_jump = float(centroid_jump.max().item())
-        min_iou = float(adjacent_iou.min().item())
-        min_border = float(frame_border_margin.min().item())
-        if max_area_step > maximum_area_step_ratio:
-            raise ValueError(
-                f"SAM 3.1 track area changes by {max_area_step:.3f}x between adjacent frames; "
-                f"limit is {maximum_area_step_ratio:.3f}x"
-            )
-        if max_jump > maximum_centroid_jump:
-            raise ValueError(
-                f"SAM 3.1 track centroid jumps {max_jump:.3f} frame diagonals; "
-                f"limit is {maximum_centroid_jump:.3f}"
-            )
-        if min_iou < minimum_adjacent_iou:
-            raise ValueError(
-                f"SAM 3.1 minimum adjacent-frame IoU is {min_iou:.4f}; "
-                f"minimum is {minimum_adjacent_iou:.4f}"
-            )
-        if min_border < minimum_border_margin:
-            clipped = (frame_border_margin < minimum_border_margin).nonzero(as_tuple=True)[0].tolist()
-            raise ValueError(
-                f"SAM 3.1 source subject is within {minimum_border_margin:.3f} of the canvas edge "
-                f"on frames {clipped}"
-            )
+        max_area_step, max_jump, min_iou, min_border = _validate_track_metrics(
+            metrics,
+            "SAM 3.1 source",
+            maximum_area_step_ratio,
+            maximum_centroid_jump,
+            minimum_adjacent_iou,
+            minimum_border_margin,
+        )
         if reference_mask.shape[0] != 1 or not (reference_mask > 0.5).any():
             raise ValueError("Validated reference mask must contain exactly one nonempty subject")
         original_size = track_data.get("orig_size")
@@ -536,6 +571,150 @@ class JakkannaSCAIL2TrackValidate:
             "track_mask_sha256": _hash_tensor(masks, binary=True),
         }
         return "0", _json(report)
+
+
+class JakkannaSCAIL2PreparedTrackValidate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_images": ("IMAGE",),
+                "driving_mask_images": ("IMAGE",),
+                "registered_reference": ("IMAGE",),
+                "reference_mask": ("MASK",),
+                "expected_frames": ("INT", {"forceInput": True}),
+                "preprocess_report": ("STRING", {"forceInput": True}),
+                "maximum_area_step_ratio": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 100.0, "step": 0.1}),
+                "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "minimum_adjacent_iou": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "minimum_border_margin": ("FLOAT", {"default": 0.005, "min": 0.0, "max": 0.25, "step": 0.001}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT")
+    RETURN_NAMES = ("source_initial_mask_report", "track_report", "validated_frames")
+    FUNCTION = "validate"
+    CATEGORY = "Jakkanna/SCAIL-2"
+
+    def validate(
+        self,
+        source_images,
+        driving_mask_images,
+        registered_reference,
+        reference_mask,
+        expected_frames,
+        preprocess_report,
+        maximum_area_step_ratio,
+        maximum_centroid_jump,
+        minimum_adjacent_iou,
+        minimum_border_margin,
+    ):
+        if source_images.ndim != 4 or source_images.shape[-1] < 3:
+            raise ValueError("Prepared source must provide an IMAGE tensor batch")
+        frames, height, width = source_images.shape[:3]
+        if frames != expected_frames:
+            raise ValueError(f"Prepared source has {frames} frames; expected {expected_frames}")
+        if driving_mask_images.ndim != 4 or driving_mask_images.shape[-1] < 3:
+            raise ValueError("Prepared driving masks must provide an RGB IMAGE tensor batch")
+        if driving_mask_images.shape[:3] != source_images.shape[:3]:
+            raise ValueError(
+                "Prepared driving masks must match the source batch exactly: "
+                f"source={tuple(source_images.shape[:3])}, masks={tuple(driving_mask_images.shape[:3])}"
+            )
+        if (
+            registered_reference.ndim != 4
+            or registered_reference.shape[0] != 1
+            or registered_reference.shape[-1] < 3
+            or registered_reference.shape[1:3] != source_images.shape[1:3]
+        ):
+            raise ValueError(
+                f"Registered reference must contain one {width}x{height} RGB image"
+            )
+        if reference_mask.ndim == 2:
+            reference_mask = reference_mask.unsqueeze(0)
+        if (
+            reference_mask.shape[0] != 1
+            or reference_mask.shape[-2:] != (height, width)
+            or not (reference_mask > 0.5).any()
+        ):
+            raise ValueError(
+                f"Reference mask must contain one nonempty {width}x{height} subject"
+            )
+        if not torch.isfinite(driving_mask_images).all():
+            raise ValueError("Prepared driving masks contain non-finite values")
+
+        palette = driving_mask_images[..., :3]
+        red_green = palette[..., :2]
+        blue = palette[..., 2]
+        if (red_green != 0).any() or not (((blue == 0) | (blue == 1)).all()):
+            raise ValueError("Prepared driving masks must contain only black and RGB blue")
+        masks = blue.bool()
+        metrics = _track_metrics(masks)
+        areas = metrics["areas"]
+        max_area_step, max_jump, min_iou, min_border = _validate_track_metrics(
+            metrics,
+            "Prepared",
+            maximum_area_step_ratio,
+            maximum_centroid_jump,
+            minimum_adjacent_iou,
+            minimum_border_margin,
+        )
+
+        try:
+            prepared = json.loads(preprocess_report)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Prepared input report is not valid JSON") from error
+        if prepared.get("schema") != "jakkanna.image_fbx_animation.v1":
+            raise ValueError("Prepared input report has an unsupported schema")
+        settings = prepared.get("settings", {})
+        expected_settings = {
+            "frames": frames,
+            "fps": 16.0,
+            "width": width,
+            "height": height,
+        }
+        for name, expected in expected_settings.items():
+            if settings.get(name) != expected:
+                raise ValueError(
+                    f"Prepared input report {name}={settings.get(name)!r}; expected {expected!r}"
+                )
+
+        artifacts = prepared.get("artifacts", {})
+        source_hash = _hash_tensor(source_images[..., :3])
+        mask_hash = _hash_tensor(palette)
+        reference_hash = _hash_tensor(registered_reference[..., :3])
+        if artifacts.get("driver", {}).get("rgb16_sha256") != source_hash:
+            raise ValueError("Prepared source frames do not match the preprocessing report")
+        if artifacts.get("driving_mask", {}).get("rgb16_sha256") != mask_hash:
+            raise ValueError("Prepared driving masks do not match the preprocessing report")
+        if artifacts.get("registered_reference", {}).get("rgb16_sha256") != reference_hash:
+            raise ValueError("Registered reference does not match the preprocessing report")
+
+        initial = masks[:1].float()
+        initial_report = {
+            "objects": 1,
+            "area_percent": float(initial.mean().item() * 100),
+            "binary_mask_sha256": _hash_tensor(initial, binary=True),
+            "source": "prepared_render",
+        }
+        track_report = {
+            "frames": frames,
+            "objects": 1,
+            "source": "prepared_render",
+            "preprocess_run_id": prepared.get("run_id"),
+            "tracking_mask_resolution": [width, height],
+            "source_canvas_resolution": [width, height],
+            "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),
+            "maximum_area_percent": float((areas.max() / (height * width) * 100).item()),
+            "maximum_adjacent_area_ratio": max_area_step,
+            "maximum_centroid_jump": max_jump,
+            "minimum_adjacent_iou": min_iou,
+            "minimum_border_margin": min_border,
+            "track_mask_sha256": _hash_tensor(masks, binary=True),
+            "source_rgb16_sha256": source_hash,
+            "driving_mask_rgb16_sha256": mask_hash,
+        }
+        return _json(initial_report), _json(track_report), frames
 
 
 def _scheduler(steps, shift, device):
@@ -691,6 +870,7 @@ class JakkannaSCAIL2ProductionManifest:
                 "sigmas": ("SIGMAS", {"tooltip": "Wire the sampled sigma schedule to record it verbatim and validate effective_flow_shift against it."}),
                 "source_images": ("IMAGE", {"tooltip": "Raw source tensor batch used by SAM and SCAIL. Connect for authoritative capture provenance."}),
                 "reference_image": ("IMAGE", {"tooltip": "Raw reference tensor used by SCAIL. Connect for authoritative reference provenance."}),
+                "preprocess_report": ("STRING", {"forceInput": True, "tooltip": "Optional prepared image/FBX input manifest."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -739,6 +919,7 @@ class JakkannaSCAIL2ProductionManifest:
         sigmas=None,
         source_images=None,
         reference_image=None,
+        preprocess_report=None,
         prompt=None,
         extra_pnginfo=None,
     ):
@@ -779,6 +960,18 @@ class JakkannaSCAIL2ProductionManifest:
             reported_reference_hash = reference_data.get("output_rgb16_sha256")
             if reported_reference_hash and reported_reference_hash != reference_image_hash:
                 raise ValueError("Raw reference tensor does not match the saved reference report")
+
+        prepared_input = None
+        if preprocess_report is not None:
+            try:
+                prepared_input = json.loads(preprocess_report)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Preprocessing report is not valid JSON") from error
+            if prepared_input.get("schema") != "jakkanna.image_fbx_animation.v1":
+                raise ValueError("Preprocessing report has an unsupported schema")
+            prepared_source_hash = prepared_input.get("artifacts", {}).get("driver", {}).get("rgb16_sha256")
+            if source_images_hash is not None and prepared_source_hash != source_images_hash:
+                raise ValueError("Raw source tensor does not match the preprocessing report")
 
         graph_settings = _graph_settings(prompt)
         graph_artifacts = _graph_artifacts(prompt, hash_model_files)
@@ -909,6 +1102,11 @@ class JakkannaSCAIL2ProductionManifest:
             pose_studio_id = parsed_pose_data.get("studio_id")
 
         workflow = (extra_pnginfo or {}).get("workflow")
+        pose_video_mask_hash = _hash_tensor(pose_video_mask)
+        if prepared_input is not None:
+            prepared_mask_hash = prepared_input.get("artifacts", {}).get("driving_mask", {}).get("rgb16_sha256")
+            if prepared_mask_hash != pose_video_mask_hash:
+                raise ValueError("Raw driving mask does not match the preprocessing report")
         manifest = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "pipeline": f"SCAIL-2 single-subject 81-frame character {mode}",
@@ -942,6 +1140,7 @@ class JakkannaSCAIL2ProductionManifest:
             "positive_prompt": positive_prompt,
             "negative_prompt": negative_prompt,
             "input": input_data,
+            "preprocess": prepared_input,
             "reference": reference_data,
             "source_initial_mask": json.loads(source_initial_mask_report),
             "reference_mask": json.loads(reference_mask_report),
@@ -952,7 +1151,7 @@ class JakkannaSCAIL2ProductionManifest:
             "pose_state_sha256": pose_state_signature,
             "pose_studio_id": pose_studio_id,
             "pose_animation": pose_animation,
-            "pose_video_mask_rgb16_sha256": _hash_tensor(pose_video_mask),
+            "pose_video_mask_rgb16_sha256": pose_video_mask_hash,
             "reference_image_mask_rgb16_sha256": _hash_tensor(reference_image_mask),
             "decoded_output_rgb16_sha256": _hash_tensor(output_images),
             "decoded_output_frames": output_images.shape[0],
@@ -983,6 +1182,7 @@ NODE_CLASS_MAPPINGS = {
     "JakkannaSCAIL2SingleSubjectMask": JakkannaSCAIL2SingleSubjectMask,
     "JakkannaSCAIL2ReferencePNG16Save": JakkannaSCAIL2ReferencePNG16Save,
     "JakkannaSCAIL2TrackValidate": JakkannaSCAIL2TrackValidate,
+    "JakkannaSCAIL2PreparedTrackValidate": JakkannaSCAIL2PreparedTrackValidate,
     "JakkannaSCAIL2UpstreamNoise": JakkannaSCAIL2UpstreamNoise,
     "JakkannaSCAIL2ProductionManifest": JakkannaSCAIL2ProductionManifest,
 }
@@ -993,6 +1193,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "JakkannaSCAIL2SingleSubjectMask": "Jakkanna SCAIL-2 Validate Subject Mask",
     "JakkannaSCAIL2ReferencePNG16Save": "Jakkanna SCAIL-2 Save 16-bit Reference",
     "JakkannaSCAIL2TrackValidate": "Jakkanna SCAIL-2 Validate Track",
+    "JakkannaSCAIL2PreparedTrackValidate": "Jakkanna SCAIL-2 Validate Prepared Track",
     "JakkannaSCAIL2UpstreamNoise": "Jakkanna SCAIL-2 Upstream Noise",
     "JakkannaSCAIL2ProductionManifest": "Jakkanna SCAIL-2 Save Manifest",
 }

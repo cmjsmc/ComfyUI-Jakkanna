@@ -13,6 +13,9 @@
     and reference tensor hashes.
 *   Updated bundled SCAIL-2 workflows to consume the direct Pose Studio batch
     and attach authoritative source and reference tensors to their manifests.
+*   Added content-addressed image/FBX preprocessing with SAM 3D Body
+    registration, strict Mixamo retarget validation, prepared-mask continuity
+    checks, and generated Fast SCAIL-2 UI/API workflows.
 
 # Version 1.2.0
 ## FBX Animation and SCAIL-2 Production Workflows

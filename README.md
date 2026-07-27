@@ -159,6 +159,15 @@ loaders identify the required Krea 2, SCAIL-2, SAM 3.1, text-encoder,
 CLIP-Vision, VAE, and LoRA artifacts; Jakkanna does not download those files
 when the workflow opens.
 
+To animate an existing single-human image instead of authoring the appearance
+with Krea, use the content-addressed
+[Registered Image + FBX Animation](docs/IMAGE_FBX_ANIMATION.md) tool. It fits
+the image with SAM 3D Body, retargets a compatible binary Mixamo FBX onto that
+body, renders a camera-registered driver and exact masks, and generates a
+separate hardened SCAIL-2 workflow. This is intentionally a distinct product
+path: wiring an arbitrary photograph directly into the Krea workflow would
+discard the reference/driver registration that makes the animation reliable.
+
 ### Posed Mesh Export
 
 `tools/export_posed_mesh.py` exports a saved Pose Studio workflow or raw
