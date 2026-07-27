@@ -36,6 +36,10 @@ UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
 # gross failure only.
 _DEFAULT_REGISTRATION_IOU = 0.35
 
+# The two canvases SCAIL-2 was trained on.
+_SCAIL2_CANVASES = {(704, 1280), (1280, 704)}
+_SCAIL2_FPS = 16.0
+
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
 if _vhs_entry is None:
@@ -627,7 +631,6 @@ class JakkannaSCAIL2PreparedTrackValidate:
                 "driving_mask_images": ("IMAGE",),
                 "registered_reference": ("IMAGE",),
                 "reference_mask": ("MASK",),
-                "expected_frames": ("INT", {"forceInput": True}),
                 "preprocess_report": ("STRING", {"forceInput": True}),
                 "maximum_area_step_ratio": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 100.0, "step": 0.1}),
                 "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
@@ -646,11 +649,28 @@ class JakkannaSCAIL2PreparedTrackValidate:
                                "intentional cropping lower it legitimately, so the default is "
                                "deliberately loose. Set to 0 to record the value without gating.",
                 }),
-            }
+            },
+            "optional": {
+                "expected_frames": ("INT", {
+                    "forceInput": True,
+                    "tooltip": "Optional external frame count to cross-check. A prepared run "
+                               "already carries its own frame count, which is checked against the "
+                               "batch either way, so this is only useful when an independent "
+                               "source of truth exists.",
+                }),
+            },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("source_initial_mask_report", "track_report", "validated_frames")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "INT", "INT", "FLOAT")
+    RETURN_NAMES = (
+        "source_initial_mask_report",
+        "track_report",
+        "validated_frames",
+        "input_report",
+        "width",
+        "height",
+        "fps",
+    )
     FUNCTION = "validate"
     CATEGORY = "Jakkanna/SCAIL-2"
 
@@ -660,19 +680,23 @@ class JakkannaSCAIL2PreparedTrackValidate:
         driving_mask_images,
         registered_reference,
         reference_mask,
-        expected_frames,
         preprocess_report,
         maximum_area_step_ratio,
         maximum_centroid_jump,
         minimum_adjacent_iou,
         minimum_border_margin,
         minimum_registration_iou=_DEFAULT_REGISTRATION_IOU,
+        expected_frames=None,
     ):
         if source_images.ndim != 4 or source_images.shape[-1] < 3:
             raise ValueError("Prepared source must provide an IMAGE tensor batch")
         frames, height, width = source_images.shape[:3]
-        if frames != expected_frames:
+        if expected_frames is not None and frames != expected_frames:
             raise ValueError(f"Prepared source has {frames} frames; expected {expected_frames}")
+        if (width, height) not in _SCAIL2_CANVASES:
+            raise ValueError(
+                f"Prepared source must be 704x1280 or 1280x704, got {width}x{height}"
+            )
         if driving_mask_images.ndim != 4 or driving_mask_images.shape[-1] < 3:
             raise ValueError("Prepared driving masks must provide an RGB IMAGE tensor batch")
         if driving_mask_images.shape[:3] != source_images.shape[:3]:
@@ -759,7 +783,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
         settings = prepared.get("settings", {})
         expected_settings = {
             "frames": frames,
-            "fps": 16.0,
+            "fps": _SCAIL2_FPS,
             "width": width,
             "height": height,
         }
@@ -815,7 +839,36 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "source_rgb16_sha256": source_hash,
             "driving_mask_rgb16_sha256": mask_hash,
         }
-        return _json(initial_report), _json(track_report), frames
+        # Stands in for JakkannaSCAIL2ProductionInputValidate on the prepared path. That
+        # node exists to interrogate a decoded container; here the batch never was one, so
+        # routing it through CreateVideo only to re-derive a frame rate this graph itself
+        # supplied would assert a constant rather than validate anything. Range and
+        # finiteness are guaranteed by construction: the frames are decoded from 8-bit PNGs
+        # into float32/255 by the preparation node.
+        input_report = {
+            "source_kind": "prepared_image_batch",
+            "source_rgb16_sha256": source_hash,
+            "source_dtype": str(source_images.dtype),
+            "source_device": str(source_images.device),
+            "width": width,
+            "height": height,
+            "frames": frames,
+            "fps": f"{int(_SCAIL2_FPS)}/1",
+            "canonical_fps_enforced": int(_SCAIL2_FPS),
+            "duration_seconds": float(frames / _SCAIL2_FPS),
+            "constant_frame_rate": True,
+            "color_metadata": "prepared PNG sequence; no container transfer or primaries metadata",
+            "preprocess_run_id": prepared.get("run_id"),
+        }
+        return (
+            _json(initial_report),
+            _json(track_report),
+            frames,
+            _json(input_report),
+            width,
+            height,
+            _SCAIL2_FPS,
+        )
 
 
 def _scheduler(steps, shift, device):
@@ -1048,9 +1101,21 @@ class JakkannaSCAIL2ProductionManifest:
                 f"Manifest seed {seed} does not match generated noise seed {noise_data.get('seed')}"
             )
 
+        # A link hands every consumer the same tensor object, so hashing it again here
+        # cannot detect a substitution the validators missed - it only re-reads several
+        # hundred megabytes. When the track report already carries a digest that was
+        # checked against the run directory on disk, that digest is carried forward and
+        # the reports are reconciled as strings instead.
+        track_data = json.loads(track_report)
+        validated_source_hash = track_data.get("source_rgb16_sha256")
+        validated_mask_hash = track_data.get("driving_mask_rgb16_sha256")
+
         source_images_hash = None
-        if source_images is not None:
+        if validated_source_hash is not None:
+            source_images_hash = validated_source_hash
+        elif source_images is not None:
             source_images_hash = _hash_tensor(source_images[..., :3])
+        if source_images_hash is not None:
             reported_source_hash = input_data.get("source_rgb16_sha256")
             if reported_source_hash and reported_source_hash != source_images_hash:
                 raise ValueError("Raw source tensor does not match the validated production input")
@@ -1203,7 +1268,11 @@ class JakkannaSCAIL2ProductionManifest:
             pose_studio_id = parsed_pose_data.get("studio_id")
 
         workflow = (extra_pnginfo or {}).get("workflow")
-        pose_video_mask_hash = _hash_tensor(pose_video_mask)
+        pose_video_mask_hash = (
+            validated_mask_hash
+            if validated_mask_hash is not None
+            else _hash_tensor(pose_video_mask)
+        )
         if prepared_input is not None:
             prepared_mask_hash = prepared_input.get("artifacts", {}).get("driving_mask", {}).get("rgb16_sha256")
             if prepared_mask_hash != pose_video_mask_hash:
@@ -1247,7 +1316,7 @@ class JakkannaSCAIL2ProductionManifest:
             "reference": reference_data,
             "source_initial_mask": json.loads(source_initial_mask_report),
             "reference_mask": json.loads(reference_mask_report),
-            "source_track": json.loads(track_report),
+            "source_track": track_data,
             "noise": noise_data,
             "source_capture_rgb16_sha256": source_images_hash,
             "reference_input_rgb16_sha256": reference_image_hash,

@@ -188,6 +188,13 @@ class ScailTrackValidationTests(unittest.TestCase):
 
 
 class PreparedTrackValidationTests(unittest.TestCase):
+    def setUp(self):
+        # The track metrics are checked on a 24x24 canvas so the mask geometry stays
+        # readable. Declare that canvas rather than relaxing the production whitelist.
+        patch = mock.patch.object(scail2_production, "_SCAIL2_CANVASES", {(24, 24)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def _inputs(self):
         source = torch.zeros((3, 24, 24, 3))
         driving_masks = torch.zeros_like(source)
@@ -240,12 +247,11 @@ class PreparedTrackValidationTests(unittest.TestCase):
 
     def test_validates_exact_prepared_palette_and_provenance(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
-        initial_json, track_json, frames = scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+        initial_json, track_json, frames, *_ = scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
             source,
             driving_masks,
             registered_reference,
             reference_mask,
-            3,
             report,
             2.0,
             0.15,
@@ -271,7 +277,6 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 report,
                 2.0,
                 0.15,
@@ -290,7 +295,6 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 json.dumps(report),
                 2.0,
                 0.15,
@@ -309,7 +313,6 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 json.dumps(report),
                 2.0,
                 0.15,
@@ -324,10 +327,10 @@ class PreparedTrackValidationTests(unittest.TestCase):
         # loose enough that only a gross fit failure trips it.
         report["registration"]["frame0_subject_iou_visible"] = 0.5
 
-        _initial, track_json, frames = (
+        _initial, track_json, frames, *_ = (
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source, driving_masks, registered_reference, reference_mask,
-                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01,
+                json.dumps(report), 2.0, 0.15, 0.1, 0.01,
             )
         )
         track = json.loads(track_json)
@@ -337,10 +340,10 @@ class PreparedTrackValidationTests(unittest.TestCase):
         self.assertEqual(frames, 3)
 
         report["registration"]["frame0_subject_iou_visible"] = 0.01
-        _initial, track_json, _frames = (
+        _initial, track_json, _frames, *_ = (
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source, driving_masks, registered_reference, reference_mask,
-                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01, 0.0,
+                json.dumps(report), 2.0, 0.15, 0.1, 0.01, 0.0,
             )
         )
         self.assertEqual(json.loads(track_json)["frame0_subject_iou_visible"], 0.01)
@@ -353,16 +356,16 @@ class PreparedTrackValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no frame-zero registration IoU"):
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source, driving_masks, registered_reference, reference_mask,
-                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01,
+                json.dumps(report), 2.0, 0.15, 0.1, 0.01,
             )
 
     def test_surfaces_the_timing_and_root_motion_preparation_resolved(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
 
-        _initial, track_json, _frames = (
+        _initial, track_json, _frames, *_ = (
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source, driving_masks, registered_reference, reference_mask,
-                3, report, 2.0, 0.15, 0.1, 0.01,
+                report, 2.0, 0.15, 0.1, 0.01,
             )
         )
 
@@ -383,13 +386,12 @@ class PreparedTrackValidationTests(unittest.TestCase):
             driving_masks, report, "Medium Shot", ["bottom", "left", "right"]
         )
 
-        _initial, track_json, _frames = (
+        _initial, track_json, _frames, *_ = (
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source,
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 report,
                 2.0,
                 0.15,
@@ -417,7 +419,6 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 report,
                 2.0,
                 0.15,
@@ -437,13 +438,170 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 driving_masks,
                 registered_reference,
                 reference_mask,
-                3,
                 report,
                 2.0,
                 0.15,
                 0.1,
                 0.01,
             )
+
+
+class PreparedInputContractTests(unittest.TestCase):
+    """The prepared gate replaces the CreateVideo -> InputValidate round trip, so it has
+    to publish the canvas, rate, and input report the rest of the graph consumed."""
+
+    def setUp(self):
+        patch = mock.patch.object(scail2_production, "_SCAIL2_CANVASES", {(24, 24)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.inputs = PreparedTrackValidationTests._inputs(self)
+
+    def _validate(self, **kwargs):
+        source, driving_masks, registered_reference, reference_mask, report = self.inputs
+        return scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+            source, driving_masks, registered_reference, reference_mask,
+            report, 2.0, 0.15, 0.1, 0.01, **kwargs,
+        )
+
+    def test_publishes_canvas_rate_and_input_report(self):
+        _initial, _track, frames, input_json, width, height, fps = self._validate()
+
+        self.assertEqual((width, height, frames, fps), (24, 24, 3, 16.0))
+        report = json.loads(input_json)
+        self.assertEqual(report["source_kind"], "prepared_image_batch")
+        self.assertEqual(report["fps"], "16/1")
+        self.assertEqual(report["canonical_fps_enforced"], 16)
+        self.assertEqual(report["frames"], 3)
+        self.assertEqual(report["preprocess_run_id"], "test-run")
+        # The manifest reconciles its source digest against this field.
+        self.assertEqual(
+            report["source_rgb16_sha256"],
+            json.loads(_track)["source_rgb16_sha256"],
+        )
+
+    def test_expected_frames_is_optional_but_still_cross_checks(self):
+        _i, _t, frames, *_ = self._validate(expected_frames=3)
+        self.assertEqual(frames, 3)
+
+        with self.assertRaisesRegex(ValueError, "expected 7"):
+            self._validate(expected_frames=7)
+
+    def test_rejects_a_canvas_scail2_was_not_trained_on(self):
+        # The production whitelist, not the one setUp declares for the metric fixtures.
+        with mock.patch.object(
+            scail2_production, "_SCAIL2_CANVASES", {(704, 1280), (1280, 704)}
+        ):
+            with self.assertRaisesRegex(ValueError, "704x1280 or 1280x704, got 24x24"):
+                self._validate()
+
+
+class ManifestDigestReuseTests(unittest.TestCase):
+    """Every consumer of a link receives the same tensor object, so re-hashing the source
+    and driving mask in the manifest cannot detect anything the prepared gate missed - it
+    only re-reads several hundred megabytes."""
+
+    SOURCE_DIGEST = "source-digest"
+    MASK_DIGEST = "mask-digest"
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, True)
+        models = os.path.join(self.home, "models")
+        os.makedirs(models)
+        for name in ("unet", "lora", "sam", "clip", "vision", "vae"):
+            with open(os.path.join(models, name), "wb") as handle:
+                handle.write(b"x")
+
+        folder_paths = scail2_production.folder_paths
+        stubs = {
+            "get_full_path": lambda category, name: os.path.join(models, name),
+            "get_output_directory": lambda: self.home,
+            "get_save_image_path": lambda prefix, out, w, h: (self.home, "manifest", 1, "", prefix),
+            "__file__": os.path.join(self.home, "folder_paths.py"),
+        }
+        for name, value in stubs.items():
+            patch = mock.patch.object(folder_paths, name, value, create=True)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+        mm = scail2_production.comfy.model_management
+        for name in ("sage_attention_enabled", "flash_attention_enabled",
+                     "xformers_enabled", "pytorch_attention_enabled"):
+            patch = mock.patch.object(mm, name, lambda: False, create=True)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _save(self, track_report, **overrides):
+        images = torch.zeros((1, 8, 8, 3))
+        kwargs = dict(
+            output_images=images,
+            pose_video_mask=images,
+            reference_image_mask=images,
+            input_report=json.dumps({"source_rgb16_sha256": self.SOURCE_DIGEST}),
+            reference_report=json.dumps({"output_rgb16_sha256": "reference-digest"}),
+            source_initial_mask_report="{}",
+            reference_mask_report="{}",
+            track_report=track_report,
+            noise_report=json.dumps({"seed": 7}),
+            positive_prompt="",
+            negative_prompt="",
+            seed=7,
+            diffusion_model="unet",
+            dpo_lora="lora",
+            sam_checkpoint="sam",
+            text_encoder="clip",
+            clip_vision="vision",
+            vae="vae",
+            attention_backend="PyTorch SDPA",
+            hash_model_files=False,
+            filename_prefix="test/manifest",
+            source_images=images,
+        )
+        kwargs.update(overrides)
+        result = scail2_production.JakkannaSCAIL2ProductionManifest().save(**kwargs)
+        with open(result["result"][0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_prepared_digests_are_carried_forward_not_recomputed(self):
+        prepared = json.dumps({
+            "source_rgb16_sha256": self.SOURCE_DIGEST,
+            "driving_mask_rgb16_sha256": self.MASK_DIGEST,
+        })
+        hashed = []
+        real_hash = scail2_production._hash_tensor
+
+        def recording_hash(tensor, binary=False):
+            hashed.append(tuple(tensor.shape))
+            return real_hash(tensor, binary)
+
+        with mock.patch.object(scail2_production, "_hash_tensor", recording_hash):
+            manifest = self._save(prepared)
+
+        self.assertEqual(manifest["source_capture_rgb16_sha256"], self.SOURCE_DIGEST)
+        self.assertEqual(manifest["pose_video_mask_rgb16_sha256"], self.MASK_DIGEST)
+        # Only the decoded output and the reference mask are still hashed here.
+        self.assertEqual(len(hashed), 2)
+
+    def test_falls_back_to_hashing_when_the_track_carries_no_digest(self):
+        # The non-prepared path - JakkannaSCAIL2TrackValidate - publishes no rgb16
+        # digests, so the manifest must still derive them from the tensors it was given.
+        real = scail2_production._hash_tensor(torch.zeros((1, 8, 8, 3))[..., :3])
+
+        manifest = self._save(
+            json.dumps({"frames": 81}),
+            input_report=json.dumps({"source_rgb16_sha256": real}),
+        )
+
+        self.assertEqual(manifest["source_capture_rgb16_sha256"], real)
+        self.assertNotEqual(manifest["pose_video_mask_rgb16_sha256"], self.MASK_DIGEST)
+
+    def test_reports_that_disagree_on_the_source_digest_are_rejected(self):
+        prepared = json.dumps({
+            "source_rgb16_sha256": "a-different-digest",
+            "driving_mask_rgb16_sha256": self.MASK_DIGEST,
+        })
+        with self.assertRaisesRegex(ValueError, "does not match the validated production input"):
+            self._save(prepared)
 
 
 class ModelHashCacheTests(unittest.TestCase):

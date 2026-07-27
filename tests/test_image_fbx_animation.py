@@ -399,6 +399,17 @@ class WorkflowContractTests(unittest.TestCase):
         node_types = {node_type for node_type, _ in self.graph.values()}
         self.assertNotIn("SAM3_VideoTrack", node_types)
         self.assertNotIn("ImageListToImageBatch", node_types)
+        # The prepared driver is already an 81-frame batch. Wrapping it in a VIDEO only
+        # to have the raw-input gate re-derive a frame rate this graph typed in asserted
+        # a constant; the prepared gate now publishes the canvas, rate, and report.
+        self.assertNotIn("CreateVideo", {
+            node_type for name, (node_type, _) in self.graph.items() if name.startswith("V")
+        })
+        self.assertNotIn("JakkannaSCAIL2ProductionInputValidate", node_types)
+        self.assertEqual(self.graph["C1"][1]["width"], ["V3", 4])
+        self.assertEqual(self.graph["C1"][1]["height"], ["V3", 5])
+        self.assertEqual(self.graph["O4"][1]["input_report"], ["V3", 3])
+        self.assertEqual(self.graph["O1"][1]["fps"], ["V3", 6])
         self.assertEqual(
             self.graph["C1"][1]["pose_video"],
             ["D1", 0],
@@ -458,7 +469,7 @@ class GreenfieldWorkflowTests(unittest.TestCase):
     def test_prepared_outputs_replace_all_run_directory_loaders(self):
         node_types = {node_type for node_type, _inputs in self.graph.values()}
         self.assertNotIn("VHS_LoadImages", node_types)
-        self.assertEqual(self.graph["V1"][1]["images"], ["F1", 0])
+        self.assertEqual(self.graph["V3"][1]["source_images"], ["F1", 0])
         self.assertEqual(self.graph["V3"][1]["driving_mask_images"], ["F1", 1])
         self.assertEqual(self.graph["V3"][1]["registered_reference"], ["F1", 2])
         self.assertEqual(self.graph["V3"][1]["preprocess_report"], ["F1", 3])
