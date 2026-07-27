@@ -46,6 +46,7 @@ def run(script: str, *args: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument("--subject-mask", type=Path)
     parser.add_argument("--fbx", type=Path, required=True)
     parser.add_argument("--name")
     parser.add_argument("--width", type=int, default=704)
@@ -67,21 +68,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_identity(image_hash: str, fbx_hash: str, settings: dict, identity: str) -> str:
+def run_identity(
+    image_hash: str,
+    fbx_hash: str,
+    settings: dict,
+    identity: str,
+    subject_mask_hash: str | None = None,
+) -> str:
     payload = {
         "image_sha256": image_hash,
         "fbx_sha256": fbx_hash,
         "settings": settings,
         "jakkanna_release_identity": identity,
     }
+    if subject_mask_hash is not None:
+        payload["subject_mask_sha256"] = subject_mask_hash
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
 
 
-def fit_cache_key(image_hash: str, identity: str, bbox_threshold: float) -> str:
+def fit_cache_key(
+    image_hash: str,
+    identity: str,
+    bbox_threshold: float,
+    subject_mask_hash: str | None = None,
+) -> str:
+    payload = f"{image_hash}:{identity}:{bbox_threshold:g}"
+    if subject_mask_hash is not None:
+        payload += f":{subject_mask_hash}"
     return hashlib.sha256(
-        f"{image_hash}:{identity}:{bbox_threshold:g}".encode()
+        payload.encode()
     ).hexdigest()[:16]
 
 
@@ -92,7 +109,14 @@ def existing_run_matches(
     fbx_hash: str,
     settings: dict,
     identity: str,
+    subject_mask_hash: str | None = None,
 ) -> bool:
+    prepared_mask = manifest.get("inputs", {}).get("subject_mask")
+    mask_matches = (
+        prepared_mask is None
+        if subject_mask_hash is None
+        else isinstance(prepared_mask, dict) and prepared_mask.get("sha256") == subject_mask_hash
+    )
     return (
         manifest.get("schema") == "jakkanna.image_fbx_animation.v1"
         and manifest.get("run_id") == run_id
@@ -100,6 +124,7 @@ def existing_run_matches(
         and manifest.get("inputs", {}).get("fbx", {}).get("sha256") == fbx_hash
         and all(manifest.get("settings", {}).get(name) == value for name, value in settings.items())
         and manifest.get("software", {}).get("jakkanna_release_identity") == identity
+        and mask_matches
     )
 
 
@@ -113,16 +138,20 @@ def write_result(path: Path | None, run_dir: Path) -> None:
 def main() -> None:
     args = parse_args()
     image = args.image.resolve()
+    subject_mask = args.subject_mask.resolve() if args.subject_mask is not None else None
     fbx = args.fbx.resolve()
     output_root = args.output_root.resolve()
     if not image.is_file():
         raise FileNotFoundError(f"reference image does not exist: {image}")
+    if subject_mask is not None and not subject_mask.is_file():
+        raise FileNotFoundError(f"subject mask does not exist: {subject_mask}")
     if not fbx.is_file():
         raise FileNotFoundError(f"FBX animation does not exist: {fbx}")
     if output_root != INPUT_ROOT and INPUT_ROOT not in output_root.parents:
         raise ValueError(f"output-root must be inside {INPUT_ROOT}")
 
     image_hash = file_sha256(image)
+    subject_mask_hash = file_sha256(subject_mask) if subject_mask is not None else None
     fbx_hash = file_sha256(fbx)
     version = package_version()
     identity = release_identity()
@@ -142,14 +171,22 @@ def main() -> None:
         "supersample": args.supersample,
         "bbox_threshold": args.bbox_threshold,
     }
-    digest = run_identity(image_hash, fbx_hash, settings, identity)
+    digest = run_identity(image_hash, fbx_hash, settings, identity, subject_mask_hash)
     prefix = safe_name(args.name or f"{image.stem}-{fbx.stem}")
     run_id = f"{prefix}-{digest[:12]}"
     run_dir = output_root / run_id
     manifest_path = run_dir / "preprocess_manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text())
-        if not existing_run_matches(manifest, run_id, image_hash, fbx_hash, settings, identity):
+        if not existing_run_matches(
+            manifest,
+            run_id,
+            image_hash,
+            fbx_hash,
+            settings,
+            identity,
+            subject_mask_hash,
+        ):
             raise ValueError(f"existing prepared run does not match its content identity: {run_dir}")
         print(f"Prepared run already exists: {run_dir}")
         write_result(args.result_file, run_dir)
@@ -166,16 +203,18 @@ def main() -> None:
     review_dir = staging_dir / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
 
-    fit_key = fit_cache_key(image_hash, identity, args.bbox_threshold)
+    fit_key = fit_cache_key(image_hash, identity, args.bbox_threshold, subject_mask_hash)
     fit_cache = output_root / "_fit_cache" / fit_key
     cached_pose = fit_cache / "pose.json"
     if not cached_pose.is_file():
-        run(
-            "fit_reference.py",
+        fit_args = [
             "--image", str(image),
             "--out", str(fit_cache),
             "--bbox-threshold", str(args.bbox_threshold),
-        )
+        ]
+        if subject_mask is not None:
+            fit_args.extend(("--mask", str(subject_mask)))
+        run("fit_reference.py", *fit_args)
     else:
         print(f"=== reusing content-keyed fit {cached_pose}")
 
@@ -194,8 +233,7 @@ def main() -> None:
         run("verify_fit.py", *common)
         run("verify_hands.py", *common)
 
-    run(
-        "build_driver.py",
+    driver_args = [
         "--image", str(image),
         "--fbx", str(fbx),
         "--fit", str(fit_path),
@@ -216,7 +254,10 @@ def main() -> None:
         "--bbox-threshold", str(args.bbox_threshold),
         "--jakkanna-version", version,
         "--jakkanna-release-identity", identity,
-    )
+    ]
+    if subject_mask is not None:
+        driver_args.extend(("--subject-mask", str(subject_mask)))
+    run("build_driver.py", *driver_args)
 
     staging_dir.rename(run_dir)
     write_result(args.result_file, run_dir)

@@ -155,8 +155,14 @@ class RunIdentityTests(unittest.TestCase):
             baseline,
             run_all.run_identity("image", "fbx", settings, "1.3.1+other"),
         )
+        self.assertNotEqual(
+            baseline,
+            run_all.run_identity(
+                "image", "fbx", settings, "1.3.0+commit", "subject-mask"
+            ),
+        )
 
-    def test_fit_cache_key_covers_release_identity_and_threshold(self):
+    def test_fit_cache_key_covers_release_identity_threshold_and_mask(self):
         baseline = run_all.fit_cache_key("image", "1.3.0+commit", 0.8)
 
         self.assertEqual(
@@ -170,6 +176,12 @@ class RunIdentityTests(unittest.TestCase):
         self.assertNotEqual(
             baseline,
             run_all.fit_cache_key("image", "1.3.0+commit", 0.7),
+        )
+        self.assertNotEqual(
+            baseline,
+            run_all.fit_cache_key(
+                "image", "1.3.0+commit", 0.8, "subject-mask"
+            ),
         )
 
     def test_existing_run_must_match_its_full_identity(self):
@@ -201,6 +213,30 @@ class RunIdentityTests(unittest.TestCase):
         self.assertFalse(
             run_all.existing_run_matches(
                 changed, "person-dance-abc", "image", "fbx", settings, "1.3.0+commit"
+            )
+        )
+        changed = json.loads(json.dumps(manifest))
+        changed["inputs"]["subject_mask"] = {"sha256": "subject-mask"}
+        self.assertTrue(
+            run_all.existing_run_matches(
+                changed,
+                "person-dance-abc",
+                "image",
+                "fbx",
+                settings,
+                "1.3.0+commit",
+                "subject-mask",
+            )
+        )
+        self.assertFalse(
+            run_all.existing_run_matches(
+                manifest,
+                "person-dance-abc",
+                "image",
+                "fbx",
+                settings,
+                "1.3.0+commit",
+                "subject-mask",
             )
         )
 
@@ -365,6 +401,17 @@ class GreenfieldWorkflowTests(unittest.TestCase):
         self.assertEqual(self.graph["V3"][1]["driving_mask_images"], ["F1", 1])
         self.assertEqual(self.graph["V3"][1]["registered_reference"], ["F1", 2])
         self.assertEqual(self.graph["V3"][1]["preprocess_report"], ["F1", 3])
+
+    def test_sam31_mask_guides_the_prefit_without_a_user_control(self):
+        self.assertEqual(self.graph["A1"][0], "SAM3_Detect")
+        self.assertEqual(self.graph["A1"][1]["model"], ["S1", 0])
+        self.assertEqual(self.graph["A1"][1]["image"], ["I1", 0])
+        self.assertEqual(self.graph["A1"][1]["conditioning"], ["S2", 0])
+        self.assertTrue(self.graph["A1"][1]["individual_masks"])
+        self.assertEqual(self.graph["A2"][1]["masks"], ["A1", 0])
+        self.assertEqual(self.graph["F1"][1]["subject_mask"], ["A2", 0])
+        self.assertNotIn("A1", make_greenfield_workflow.VISIBLE)
+        self.assertNotIn("A2", make_greenfield_workflow.VISIBLE)
 
     def test_prepared_validation_remains_on_sampling_dependency_path(self):
         self.assertEqual(self.graph["C1"][1]["length"], ["V3", 2])

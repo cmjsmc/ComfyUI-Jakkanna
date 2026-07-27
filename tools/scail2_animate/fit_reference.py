@@ -27,9 +27,22 @@ def load_image_tensor(path: Path) -> torch.Tensor:
     return torch.from_numpy(rgb).unsqueeze(0)
 
 
+def load_mask_tensor(path: Path, image: torch.Tensor) -> torch.Tensor:
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise FileNotFoundError(f"could not read {path}")
+    if mask.shape != tuple(image.shape[1:3]):
+        raise ValueError(
+            f"subject mask is {mask.shape[1]}x{mask.shape[0]}; "
+            f"reference image is {image.shape[2]}x{image.shape[1]}"
+        )
+    return torch.from_numpy((mask > 127).astype(np.float32)).unsqueeze(0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument("--mask", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--bbox-threshold", type=float, default=0.8)
     args = parser.parse_args()
@@ -43,6 +56,9 @@ def main() -> None:
 
     image = load_image_tensor(args.image)
     print(f"[fit] image {args.image}  {tuple(image.shape)}")
+    mask = load_mask_tensor(args.mask, image) if args.mask is not None else None
+    if mask is not None:
+        print(f"[fit] subject mask {args.mask}  coverage={float(mask.mean()):.6f}")
 
     model = LoadSAM3DBodyModel().load_model("Auto")[0]
     pose_json = SAM3DBodyProcessToJson().process_to_json(
@@ -51,6 +67,7 @@ def main() -> None:
         bbox_threshold=args.bbox_threshold,
         inference_type="full",
         debug_scale=True,
+        mask=mask,
     )[0]
 
     payload = json.loads(pose_json)
