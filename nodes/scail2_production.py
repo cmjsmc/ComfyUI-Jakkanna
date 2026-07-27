@@ -509,15 +509,24 @@ class JakkannaSCAIL2TrackValidate:
             )
         if reference_mask.shape[0] != 1 or not (reference_mask > 0.5).any():
             raise ValueError("Validated reference mask must contain exactly one nonempty subject")
-        if reference_mask.shape[-2:] != (height, width):
+        original_size = track_data.get("orig_size")
+        if (
+            not isinstance(original_size, (list, tuple))
+            or len(original_size) != 2
+            or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in original_size)
+        ):
+            raise ValueError("SAM 3.1 track is missing a valid original canvas size")
+        if reference_mask.shape[-2:] != tuple(original_size):
             raise ValueError(
                 f"Reference mask is {reference_mask.shape[-1]}x{reference_mask.shape[-2]}; "
-                f"source track is {width}x{height}"
+                f"source canvas is {original_size[1]}x{original_size[0]}"
             )
 
         report = {
             "frames": masks.shape[0],
             "objects": 1,
+            "tracking_mask_resolution": [width, height],
+            "source_canvas_resolution": [original_size[1], original_size[0]],
             "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),
             "maximum_area_percent": float((areas.max() / (height * width) * 100).item()),
             "maximum_adjacent_area_ratio": max_area_step,

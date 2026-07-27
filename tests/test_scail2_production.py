@@ -115,6 +115,28 @@ class ScailTrackValidationTests(unittest.TestCase):
 
         self.assertAlmostEqual(json.loads(report_json)["minimum_border_margin"], 4 / 24)
 
+    def test_validates_reference_against_original_canvas_not_internal_masks(self):
+        masks = torch.zeros((3, 1, 24, 24), dtype=torch.bool)
+        masks[:, :, 4:20, 4:20] = True
+        track = self._track(masks)
+        track["orig_size"] = (32, 18)
+        reference = torch.zeros((1, 32, 18))
+        reference[:, 4:28, 3:15] = 1
+
+        _indices, report_json = scail2_production.JakkannaSCAIL2TrackValidate().validate(
+            track,
+            reference,
+            3,
+            2.0,
+            0.15,
+            0.1,
+            0.01,
+        )
+
+        report = json.loads(report_json)
+        self.assertEqual(report["tracking_mask_resolution"], [24, 24])
+        self.assertEqual(report["source_canvas_resolution"], [18, 32])
+
 
 class ManifestHelperTests(unittest.TestCase):
     def test_git_commit_supports_packed_refs(self):
