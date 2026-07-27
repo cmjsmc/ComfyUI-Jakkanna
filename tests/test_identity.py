@@ -171,12 +171,31 @@ class IdentityBoundaryTests(unittest.TestCase):
             node_types = {node["type"] for node in workflow["nodes"]}
             self.assertFalse(node_types.intersection(legacy_types), filename)
             self.assertTrue(any(node_type.startswith("JakkannaSCAIL2") for node_type in node_types), filename)
+            self.assertNotIn("ImageListToImageBatch", node_types, filename)
 
             pose_node = next(node for node in workflow["nodes"] if node["type"] == "VNCCS_PoseStudio")
             pose_data = json.loads(pose_node["widgets_values"][0])
             self.assertEqual(pose_data["export"]["animation_frames"], 81, filename)
             self.assertEqual(pose_data["export"]["animation_fps"], 16, filename)
             self.assertEqual(pose_data["export"]["animation_timing"], "FIT_CLIP", filename)
+            self.assertEqual(pose_data["export"]["animation_root_motion"], "PRESERVE", filename)
+            self.assertTrue(pose_data["studio_id"], filename)
+            self.assertEqual(pose_node["outputs"][2]["name"], "image_batch", filename)
+            self.assertTrue(pose_node["outputs"][2]["links"], filename)
+
+            manifest = next(
+                node for node in workflow["nodes"]
+                if node["type"] == "JakkannaSCAIL2ProductionManifest"
+            )
+            manifest_inputs = {item["name"]: item["link"] for item in manifest["inputs"]}
+            self.assertIsNotNone(manifest_inputs["source_images"], filename)
+            self.assertIsNotNone(manifest_inputs["reference_image"], filename)
+
+            track = next(
+                node for node in workflow["nodes"]
+                if node["type"] == "JakkannaSCAIL2TrackValidate"
+            )
+            self.assertEqual(track["widgets_values"], [2.0, 0.15, 0.1, 0.005], filename)
 
             video_node = next(node for node in workflow["nodes"] if node["type"] == "VHS_VideoCombine")
             self.assertEqual(video_node["properties"].get("cnr_id"), "comfyui-videohelpersuite", filename)
@@ -206,7 +225,10 @@ class IdentityBoundaryTests(unittest.TestCase):
             self.assertEqual(pose_data["export"]["animation_frames"], 81, filename)
             self.assertEqual(pose_data["export"]["animation_fps"], 16, filename)
             self.assertEqual(pose_data["export"]["animation_timing"], "REALTIME", filename)
+            self.assertEqual(pose_data["export"]["animation_root_motion"], "PRESERVE", filename)
             self.assertEqual(pose_data["export"]["bg_color"], [0, 0, 0], filename)
+            self.assertNotIn("ImageListToImageBatch", by_type, filename)
+            self.assertEqual(by_type["VNCCS_PoseStudio"][0]["outputs"][2]["name"], "image_batch", filename)
 
             self.assertTrue(by_type["WanSCAILToVideo"][0]["widgets_values"][-1], filename)
             self.assertTrue(by_type["SCAIL2ColoredMask"][0]["widgets_values"][-1], filename)

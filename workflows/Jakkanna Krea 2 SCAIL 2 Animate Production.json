@@ -2,7 +2,7 @@
   "id": "jakkanna-krea2-scail2-animate",
   "revision": 0,
   "last_node_id": 900,
-  "last_link_id": 96,
+  "last_link_id": 98,
   "nodes": [
     {
       "id": 1,
@@ -29,9 +29,7 @@
         {
           "name": "images",
           "type": "IMAGE",
-          "links": [
-            1
-          ],
+          "links": [],
           "slot_index": 0
         },
         {
@@ -41,56 +39,28 @@
             2
           ],
           "slot_index": 1
+        },
+        {
+          "name": "image_batch",
+          "type": "IMAGE",
+          "links": [
+            3,
+            4,
+            97
+          ],
+          "slot_index": 2
         }
       ],
       "properties": {
         "Node name for S&R": "VNCCS_PoseStudio",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
-        "{\"mesh\":{\"age\":27,\"gender\":0,\"weight\":0.5,\"muscle\":0.5,\"height\":0.5,\"proportions\":0.5,\"african\":0.3333333333333333,\"asian\":0.3333333333333333,\"caucasian\":0.3333333333333333,\"breast_size\":0.66,\"firmness\":0.5,\"penis_len\":0.5,\"penis_circ\":0.5,\"penis_test\":0.5,\"head_size\":1,\"arm_size\":1,\"hand_size\":1,\"foot_size\":1,\"upper_arm_l_length\":0.5,\"upper_arm_r_length\":0.5,\"forearm_l_length\":0.5,\"forearm_r_length\":0.5,\"thigh_l_length\":0.5,\"thigh_r_length\":0.5,\"shin_l_length\":0.5,\"shin_r_length\":0.5,\"spine_length\":0.5},\"export\":{\"view_width\":704,\"view_height\":1280,\"cam_zoom\":1,\"cam_offset_x\":0,\"cam_offset_y\":0,\"cam_yaw_deg\":0,\"cam_pitch_deg\":0,\"output_mode\":\"LIST\",\"grid_columns\":2,\"bg_color\":[0,0,0],\"debugMode\":false,\"debugPortraitMode\":false,\"debugKeepLighting\":false,\"debugShowSAMHelper\":false,\"debugShowSAMMeshOverlay\":false,\"samApplyCamera\":false,\"keepOriginalLighting\":false,\"user_prompt\":\"A stylized semi-realistic adult red-haired woman in a teal-green bikini performs the imported full-body animation with stable anatomy and consistent clothing on a tropical beach at sunset. Her whole body, hands, feet, and hair remain visible in a fixed portrait composition. Warm cinematic rim light, saturated color, graphic cel shading, angular forms, painterly texture, coherent motion, no cuts, no camera movement.\",\"prompt_template\":\"<user_prompt>\",\"skin_type\":\"naked\",\"interface_mode\":\"studio\",\"hand_controls_v2\":true,\"animation_frames\":81,\"animation_fps\":16,\"animation_start_seconds\":0,\"animation_timing\":\"FIT_CLIP\"},\"poses\":[{}],\"lights\":[{\"type\":\"directional\",\"color\":\"#99c1f1\",\"intensity\":2,\"x\":10,\"y\":34,\"z\":30},{\"type\":\"ambient\",\"color\":\"#f8e45c\",\"intensity\":1,\"x\":0,\"y\":0,\"z\":0}],\"activeTab\":0,\"lighting_prompts\":[\"A stylized semi-realistic adult red-haired woman in a teal-green bikini performs the imported full-body animation with stable anatomy and consistent clothing on a tropical beach at sunset. Her whole body, hands, feet, and hair remain visible in a fixed portrait composition. Warm cinematic rim light, saturated color, graphic cel shading, angular forms, painterly texture, coherent motion, no cuts, no camera movement.\"],\"background_url\":null}"
+        "{\"mesh\":{\"age\":27,\"gender\":0,\"weight\":0.5,\"muscle\":0.5,\"height\":0.5,\"proportions\":0.5,\"african\":0.3333333333333333,\"asian\":0.3333333333333333,\"caucasian\":0.3333333333333333,\"breast_size\":0.66,\"firmness\":0.5,\"penis_len\":0.5,\"penis_circ\":0.5,\"penis_test\":0.5,\"head_size\":1,\"arm_size\":1,\"hand_size\":1,\"foot_size\":1,\"upper_arm_l_length\":0.5,\"upper_arm_r_length\":0.5,\"forearm_l_length\":0.5,\"forearm_r_length\":0.5,\"thigh_l_length\":0.5,\"thigh_r_length\":0.5,\"shin_l_length\":0.5,\"shin_r_length\":0.5,\"spine_length\":0.5},\"export\":{\"view_width\":704,\"view_height\":1280,\"cam_zoom\":1,\"cam_offset_x\":0,\"cam_offset_y\":0,\"cam_yaw_deg\":0,\"cam_pitch_deg\":0,\"output_mode\":\"LIST\",\"grid_columns\":2,\"bg_color\":[0,0,0],\"debugMode\":false,\"debugPortraitMode\":false,\"debugKeepLighting\":false,\"debugShowSAMHelper\":false,\"debugShowSAMMeshOverlay\":false,\"samApplyCamera\":false,\"keepOriginalLighting\":false,\"user_prompt\":\"A stylized semi-realistic adult red-haired woman in a teal-green bikini performs the imported full-body animation with stable anatomy and consistent clothing on a tropical beach at sunset. Her whole body, hands, feet, and hair remain visible in a fixed portrait composition. Warm cinematic rim light, saturated color, graphic cel shading, angular forms, painterly texture, coherent motion, no cuts, no camera movement.\",\"prompt_template\":\"<user_prompt>\",\"skin_type\":\"naked\",\"interface_mode\":\"studio\",\"hand_controls_v2\":true,\"animation_frames\":81,\"animation_fps\":16,\"animation_start_seconds\":0,\"animation_timing\":\"FIT_CLIP\",\"animation_root_motion\":\"PRESERVE\"},\"poses\":[{}],\"lights\":[{\"type\":\"directional\",\"color\":\"#99c1f1\",\"intensity\":2,\"x\":10,\"y\":34,\"z\":30},{\"type\":\"ambient\",\"color\":\"#f8e45c\",\"intensity\":1,\"x\":0,\"y\":0,\"z\":0}],\"activeTab\":0,\"lighting_prompts\":[\"A stylized semi-realistic adult red-haired woman in a teal-green bikini performs the imported full-body animation with stable anatomy and consistent clothing on a tropical beach at sunset. Her whole body, hands, feet, and hair remain visible in a fixed portrait composition. Warm cinematic rim light, saturated color, graphic cel shading, angular forms, painterly texture, coherent motion, no cuts, no camera movement.\"],\"background_url\":null,\"studio_id\":\"jakkanna-krea-2-scail-2-animate-production\"}"
       ],
-      "title": "1. Jakkanna Motion + Appearance Authoring — import FBX here"
-    },
-    {
-      "id": 2,
-      "type": "ImageListToImageBatch",
-      "pos": [
-        20,
-        230
-      ],
-      "size": [
-        340,
-        150
-      ],
-      "flags": {},
-      "order": 1,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 1
-        }
-      ],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "links": [
-            3,
-            4
-          ],
-          "slot_index": 0
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "ImageListToImageBatch"
-      },
-      "widgets_values": [],
-      "title": "81 ordered mannequin renders"
+      "title": "1. Jakkanna Motion + Appearance Authoring \u2014 import FBX here"
     },
     {
       "id": 3,
@@ -104,7 +74,7 @@
         150
       ],
       "flags": {},
-      "order": 2,
+      "order": 1,
       "mode": 0,
       "inputs": [
         {
@@ -128,7 +98,7 @@
       "properties": {
         "Node name for S&R": "JakkannaPromptFromList",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -148,7 +118,7 @@
         150
       ],
       "flags": {},
-      "order": 3,
+      "order": 2,
       "mode": 0,
       "inputs": [
         {
@@ -189,7 +159,7 @@
         150
       ],
       "flags": {},
-      "order": 4,
+      "order": 3,
       "mode": 0,
       "inputs": [
         {
@@ -236,7 +206,7 @@
         150
       ],
       "flags": {},
-      "order": 5,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
@@ -275,7 +245,7 @@
         150
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [
         {
@@ -334,7 +304,7 @@
         150
       ],
       "flags": {},
-      "order": 7,
+      "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -368,7 +338,7 @@
         150
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
@@ -394,7 +364,7 @@
         "MysticXXX_KREA2_v2_stripped.safetensors",
         0.55
       ],
-      "title": "MysticXXX stripped — 0.55"
+      "title": "MysticXXX stripped \u2014 0.55"
     },
     {
       "id": 10,
@@ -408,7 +378,7 @@
         150
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -434,7 +404,7 @@
         "krea2_raw_to_turbo_r256_comfy.safetensors",
         1
       ],
-      "title": "Raw to Turbo r256 — 1.0"
+      "title": "Raw to Turbo r256 \u2014 1.0"
     },
     {
       "id": 11,
@@ -448,7 +418,7 @@
         150
       ],
       "flags": {},
-      "order": 10,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -482,7 +452,7 @@
         150
       ],
       "flags": {},
-      "order": 11,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
@@ -530,7 +500,7 @@
         150
       ],
       "flags": {},
-      "order": 12,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -566,7 +536,7 @@
         150
       ],
       "flags": {},
-      "order": 13,
+      "order": 12,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -599,7 +569,7 @@
         150
       ],
       "flags": {},
-      "order": 14,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -641,7 +611,7 @@
         150
       ],
       "flags": {},
-      "order": 15,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -687,7 +657,7 @@
         "simple",
         0.6
       ],
-      "title": "Proven Krea img2img — 8 steps / denoise 0.60"
+      "title": "Proven Krea img2img \u2014 8 steps / denoise 0.60"
     },
     {
       "id": 17,
@@ -701,7 +671,7 @@
         150
       ],
       "flags": {},
-      "order": 16,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
@@ -725,7 +695,8 @@
             23,
             33,
             43,
-            58
+            58,
+            98
           ],
           "slot_index": 0
         }
@@ -747,7 +718,7 @@
         150
       ],
       "flags": {},
-      "order": 17,
+      "order": 16,
       "mode": 0,
       "inputs": [
         {
@@ -769,7 +740,7 @@
       "properties": {
         "Node name for S&R": "SCAIL2ReferencePNG16Save",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -789,7 +760,7 @@
         150
       ],
       "flags": {},
-      "order": 18,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -824,7 +795,7 @@
         150
       ],
       "flags": {},
-      "order": 19,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -886,7 +857,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionInputValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [],
@@ -904,7 +875,7 @@
         150
       ],
       "flags": {},
-      "order": 20,
+      "order": 19,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -952,7 +923,7 @@
         150
       ],
       "flags": {},
-      "order": 21,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
@@ -992,7 +963,7 @@
         150
       ],
       "flags": {},
-      "order": 22,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -1063,7 +1034,7 @@
         150
       ],
       "flags": {},
-      "order": 23,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -1093,7 +1064,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1113,7 +1084,7 @@
         150
       ],
       "flags": {},
-      "order": 24,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -1170,7 +1141,7 @@
         150
       ],
       "flags": {},
-      "order": 25,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -1241,7 +1212,7 @@
         150
       ],
       "flags": {},
-      "order": 26,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -1272,7 +1243,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1292,7 +1263,7 @@
         150
       ],
       "flags": {},
-      "order": 27,
+      "order": 26,
       "mode": 0,
       "inputs": [
         {
@@ -1333,13 +1304,14 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2TrackValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
-        4,
-        0.5,
-        0.02
+        2.0,
+        0.15,
+        0.1,
+        0.005
       ],
       "title": "81-frame track continuity gate"
     },
@@ -1355,7 +1327,7 @@
         150
       ],
       "flags": {},
-      "order": 28,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -1406,7 +1378,7 @@
         "none",
         false
       ],
-      "title": "ANIMATION MASKS — black driver / white reference"
+      "title": "ANIMATION MASKS \u2014 black driver / white reference"
     },
     {
       "id": 30,
@@ -1420,7 +1392,7 @@
         150
       ],
       "flags": {},
-      "order": 29,
+      "order": 28,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1452,7 +1424,7 @@
         150
       ],
       "flags": {},
-      "order": 30,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -1495,7 +1467,7 @@
         150
       ],
       "flags": {},
-      "order": 31,
+      "order": 30,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1528,7 +1500,7 @@
         150
       ],
       "flags": {},
-      "order": 32,
+      "order": 31,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1563,7 +1535,7 @@
         150
       ],
       "flags": {},
-      "order": 33,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -1610,7 +1582,7 @@
         150
       ],
       "flags": {},
-      "order": 34,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -1656,7 +1628,7 @@
         150
       ],
       "flags": {},
-      "order": 35,
+      "order": 34,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1689,7 +1661,7 @@
         150
       ],
       "flags": {},
-      "order": 36,
+      "order": 35,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1722,7 +1694,7 @@
         150
       ],
       "flags": {},
-      "order": 37,
+      "order": 36,
       "mode": 0,
       "inputs": [
         {
@@ -1761,7 +1733,7 @@
         150
       ],
       "flags": {},
-      "order": 38,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
@@ -1799,7 +1771,7 @@
         150
       ],
       "flags": {},
-      "order": 39,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -1920,7 +1892,7 @@
         5,
         false
       ],
-      "title": "SCAIL-2 ANIMATION MODE — replacement_mode false"
+      "title": "SCAIL-2 ANIMATION MODE \u2014 replacement_mode false"
     },
     {
       "id": 41,
@@ -1934,7 +1906,7 @@
         150
       ],
       "flags": {},
-      "order": 40,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
@@ -1982,7 +1954,7 @@
         150
       ],
       "flags": {},
-      "order": 41,
+      "order": 40,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2006,7 +1978,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2FlowUniPC",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2026,7 +1998,7 @@
         150
       ],
       "flags": {},
-      "order": 42,
+      "order": 41,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2061,7 +2033,7 @@
         150
       ],
       "flags": {},
-      "order": 43,
+      "order": 42,
       "mode": 0,
       "inputs": [
         {
@@ -2099,7 +2071,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2UpstreamNoise",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2118,7 +2090,7 @@
         150
       ],
       "flags": {},
-      "order": 44,
+      "order": 43,
       "mode": 0,
       "inputs": [
         {
@@ -2180,7 +2152,7 @@
         150
       ],
       "flags": {},
-      "order": 45,
+      "order": 44,
       "mode": 0,
       "inputs": [
         {
@@ -2223,7 +2195,7 @@
         150
       ],
       "flags": {},
-      "order": 46,
+      "order": 45,
       "mode": 0,
       "inputs": [
         {
@@ -2275,7 +2247,7 @@
         150
       ],
       "flags": {},
-      "order": 47,
+      "order": 46,
       "mode": 0,
       "inputs": [
         {
@@ -2314,7 +2286,7 @@
         150
       ],
       "flags": {},
-      "order": 48,
+      "order": 47,
       "mode": 0,
       "inputs": [
         {
@@ -2394,7 +2366,7 @@
         150
       ],
       "flags": {},
-      "order": 49,
+      "order": 48,
       "mode": 0,
       "inputs": [
         {
@@ -2461,6 +2433,16 @@
           "name": "sigmas",
           "type": "SIGMAS",
           "link": null
+        },
+        {
+          "name": "source_images",
+          "type": "IMAGE",
+          "link": 97
+        },
+        {
+          "name": "reference_image",
+          "type": "IMAGE",
+          "link": 98
         }
       ],
       "outputs": [
@@ -2474,7 +2456,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionManifest",
         "cnr_id": "jakkanna",
-        "ver": "1.2.0",
+        "ver": "1.3.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2511,7 +2493,7 @@
         150
       ],
       "flags": {},
-      "order": 50,
+      "order": 49,
       "mode": 0,
       "inputs": [
         {
@@ -2555,7 +2537,7 @@
         150
       ],
       "flags": {},
-      "order": 51,
+      "order": 50,
       "mode": 0,
       "inputs": [
         {
@@ -2590,7 +2572,7 @@
         150
       ],
       "flags": {},
-      "order": 52,
+      "order": 51,
       "mode": 0,
       "inputs": [
         {
@@ -2625,7 +2607,7 @@
         480
       ],
       "flags": {},
-      "order": 53,
+      "order": 52,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -2633,19 +2615,11 @@
         "Node name for S&R": "MarkdownNote"
       },
       "widgets_values": [
-        "# Jakkanna + Krea 2 + SCAIL-2 Animate — Production\n\nThis two-stage graph uses one Jakkanna Pose Studio node as the motion and prompt source.\n\n1. Import a licensed Mixamo-compatible FBX into **Jakkanna Motion + Appearance Authoring**. The default **FIT_CLIP** mode samples the complete clip once into 81 frames and plays it at 16 fps. Choose **REALTIME** only when the source extends through 5.000 seconds.\n2. Describe the finished character, clothing, action, scene, lighting, and fixed camera in the Jakkanna prompt.\n3. Frame 0 enters Krea 2 to create the appearance reference; all 81 Jakkanna frames drive SCAIL-2 Animation Mode.\n4. Review the driver, 16-bit reference, SAM 3.1 track, reference mask, and final video.\n\nThis Production workflow uses the upstream 40-step Flow-UniPC topology. The lossless FFV1 master requires **ComfyUI-VideoHelperSuite 1.7.9 or newer**. Required Krea 2, SCAIL-2, SAM 3.1, VAE, text-encoder, CLIP-Vision, and LoRA model files are selected in the loader nodes.\n"
+        "# Jakkanna + Krea-2 + SCAIL-2\n\nThis is the generic animation template. Pose Studio emits the queued semantic state as a direct IMAGE batch; the sampling path does not use a list adapter or encoded-video round trip.\n\nImport a compatible FBX in Pose Studio, review the complete driver and masks, and adjust the camera until the validated subject remains clear of the canvas edge. Root motion defaults to PRESERVE; select IN_PLACE only for an intentionally stationary clip.\n\nThe production manifest derives execution settings from the submitted graph and cross-checks raw source and reference tensor hashes. Fast uses the six-step iteration profile; Production uses Flow-UniPC. Run ComfyUI with `./run.sh`."
       ]
     }
   ],
   "links": [
-    [
-      1,
-      1,
-      0,
-      2,
-      0,
-      "IMAGE"
-    ],
     [
       2,
       1,
@@ -2656,16 +2630,16 @@
     ],
     [
       3,
+      1,
       2,
-      0,
       4,
       0,
       "IMAGE"
     ],
     [
       4,
+      1,
       2,
-      0,
       5,
       0,
       "IMAGE"
@@ -3405,6 +3379,22 @@
       53,
       0,
       "*"
+    ],
+    [
+      97,
+      1,
+      2,
+      50,
+      13,
+      "IMAGE"
+    ],
+    [
+      98,
+      17,
+      0,
+      50,
+      14,
+      "IMAGE"
     ]
   ],
   "groups": [],
