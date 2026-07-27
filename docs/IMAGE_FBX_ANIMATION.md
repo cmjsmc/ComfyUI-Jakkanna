@@ -41,9 +41,10 @@ adds one intended control: a production-safe camera preset. The choices are:
 
 All presets use one fixed camera for the full clip and apply the same transform
 to the registered photograph, rendered driver, and masks. Cropped presets may
-intentionally continue below the bottom edge; top and side canvas-clearance
-checks remain mandatory. An explicit selection is recorded in cache identity
-and provenance and is never silently replaced.
+intentionally continue below the bottom edge, and peripheral limbs may
+continue through a side edge as they would in a conventional close shot.
+Top/head canvas clearance remains mandatory. An explicit selection is recorded
+in cache identity and provenance and is never silently replaced.
 
 High angle, low angle, profile, bird's-eye, worm's-eye,
 over-the-shoulder, and point-of-view presets are intentionally omitted. A

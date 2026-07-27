@@ -36,8 +36,10 @@ they do not need adjustment.
 Full, American, medium, and close shots preserve the original view axis and
 change only optical framing. Dutch presets add a fixed 10-degree optical-axis
 roll. Cropped shots may intentionally continue below the bottom of the canvas,
-but top and side safety validation remains active. The same fixed camera
-transform is applied to the reference, driver, and mask for all 81 frames.
+and peripheral limbs may continue through a side edge as they would in a
+conventional close shot; top/head clearance remains active. The same fixed
+camera transform is applied to the reference, driver, and mask for all 81
+frames.
 
 The workflow intentionally omits high angle, low angle, profile, bird's-eye,
 worm's-eye, over-the-shoulder, and point-of-view presets. Those require

@@ -135,6 +135,25 @@ def fit_body_camera(rays: np.ndarray, width: int, height: int,
     return focal, (cx, cy)
 
 
+def fit_cropped_camera(rays: np.ndarray, width: int, height: int,
+                       margin: float) -> tuple[float, tuple[float, float]]:
+    """Frame the selected vertical shot line, allowing peripheral side crop."""
+    x_lo, y_lo = rays.min(axis=0)
+    x_hi, y_hi = rays.max(axis=0)
+    focal = (height * (1 - 2 * margin)) / max(y_hi - y_lo, 1e-9)
+    cx = width * 0.5 - focal * (x_lo + x_hi) * 0.5
+    cy = height * 0.5 - focal * (y_lo + y_hi) * 0.5
+    return focal, (cx, cy)
+
+
+def fit_preset_camera(rays: np.ndarray, width: int, height: int,
+                      margin: float, vertical_fraction: float
+                      ) -> tuple[float, tuple[float, float]]:
+    if vertical_fraction < 1:
+        return fit_cropped_camera(rays, width, height, margin)
+    return fit_body_camera(rays, width, height, margin)
+
+
 def shot_rays(frame_rays: list[np.ndarray], vertical_fraction: float) -> np.ndarray:
     if not 0 < vertical_fraction <= 1:
         raise ValueError("camera preset vertical fraction must be in (0, 1]")
@@ -264,7 +283,9 @@ def main() -> None:
     resolved_root_motion = "preserve" if follow_root else "in_place"
     preserved_focal = None
     if args.framing == "full_body" and args.root_motion == "auto":
-        preserved_focal, _ = fit_body_camera(rays, args.width, args.height, camera_margin)
+        preserved_focal, _ = fit_preset_camera(
+            rays, args.width, args.height, camera_margin, vertical_fraction
+        )
         safe_focal = minimum_safe_focal(args.width, args.height, vertical_fraction)
         if not np.isfinite(preserved_focal) or preserved_focal < safe_focal:
             posed, frame_rays = pose_frames(False)
@@ -276,7 +297,9 @@ def main() -> None:
             )
 
     if args.framing == "full_body":
-        focal, principal = fit_body_camera(rays, args.width, args.height, camera_margin)
+        focal, principal = fit_preset_camera(
+            rays, args.width, args.height, camera_margin, vertical_fraction
+        )
     else:
         if args.camera_preset != AUTO_CAMERA_PRESET:
             raise ValueError("camera presets require full_body framing")

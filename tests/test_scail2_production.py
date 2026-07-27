@@ -305,12 +305,12 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.01,
             )
 
-    def test_medium_shot_allows_only_declared_bottom_clipping(self):
+    def test_medium_shot_allows_declared_bottom_and_side_clipping(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
         driving_masks.zero_()
-        driving_masks[:, 4:24, 4:20, 2] = 1
+        driving_masks[:, 4:24, 0:20, 2] = 1
         report = self._set_camera_preset(
-            driving_masks, report, "Medium Shot", ["bottom"]
+            driving_masks, report, "Medium Shot", ["bottom", "left", "right"]
         )
 
         _initial, track_json, _frames = (
@@ -330,15 +330,15 @@ class PreparedTrackValidationTests(unittest.TestCase):
 
         self.assertEqual(
             json.loads(track_json)["allowed_border_clipping"],
-            ["bottom"],
+            ["bottom", "left", "right"],
         )
 
-    def test_medium_shot_still_rejects_side_clipping(self):
+    def test_medium_shot_still_rejects_top_clipping(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
         driving_masks.zero_()
-        driving_masks[:, 4:24, 0:20, 2] = 1
+        driving_masks[:, 0:20, 4:20, 2] = 1
         report = self._set_camera_preset(
-            driving_masks, report, "Medium Shot", ["bottom"]
+            driving_masks, report, "Medium Shot", ["bottom", "left", "right"]
         )
 
         with self.assertRaisesRegex(ValueError, "canvas edge"):
@@ -358,7 +358,7 @@ class PreparedTrackValidationTests(unittest.TestCase):
     def test_rejects_camera_preset_provenance_that_expands_crop_edges(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
         report = self._set_camera_preset(
-            driving_masks, report, "Medium Shot", ["bottom", "left"]
+            driving_masks, report, "Medium Shot", ["top", "bottom", "left", "right"]
         )
 
         with self.assertRaisesRegex(ValueError, "invalid border-clipping provenance"):

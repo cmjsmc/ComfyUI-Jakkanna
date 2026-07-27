@@ -42,7 +42,7 @@ class CameraPresetTests(unittest.TestCase):
         )
         self.assertEqual(
             camera_presets.camera_preset_spec("Medium Shot")["allowed_border_clipping"],
-            ("bottom",),
+            ("bottom", "left", "right"),
         )
         with self.assertRaisesRegex(ValueError, "Unsupported camera preset"):
             camera_presets.camera_preset_spec("Bird's-eye View")
@@ -64,6 +64,21 @@ class CameraPresetTests(unittest.TestCase):
             build_driver.minimum_safe_focal(704, 1280, 0.5),
             build_driver.minimum_safe_focal(704, 1280, 1.0),
         )
+
+    def test_cropped_camera_honours_the_vertical_shot_line(self):
+        rays = np.array([
+            [-2.0, -0.5],
+            [2.0, -0.5],
+            [-0.25, 0.5],
+            [0.25, 0.5],
+        ])
+
+        focal, principal = build_driver.fit_cropped_camera(rays, 704, 1280, 0.08)
+        projected_y = rays[:, 1] * focal + principal[1]
+
+        self.assertAlmostEqual(projected_y.min(), 1280 * 0.08)
+        self.assertAlmostEqual(projected_y.max(), 1280 * 0.92)
+        self.assertGreater(focal * (rays[:, 0].max() - rays[:, 0].min()), 704)
 
     def test_roll_is_identical_for_geometry_and_reference_reprojection(self):
         fit = type("Fit", (), {"image_size": (100, 80), "focal_length": 100.0})()

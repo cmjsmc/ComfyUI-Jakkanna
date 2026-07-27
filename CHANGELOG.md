@@ -9,8 +9,8 @@
 *   Bound camera selection to preprocessing cache identity and production
     provenance, and rejected silent preset substitution or expanded crop
     permissions.
-*   Allowed intentional bottom-edge continuation for cropped shots while
-    retaining top and side canvas-clearance validation.
+*   Allowed intentional bottom and peripheral side continuation for cropped
+    shots while retaining top/head canvas-clearance validation.
 *   Kept the existing Greenfield workflow and preparation node compatible;
     omitted single-image camera angles that require unreliable novel-view
     synthesis.
