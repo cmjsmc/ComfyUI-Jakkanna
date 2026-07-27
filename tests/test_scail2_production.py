@@ -12,20 +12,66 @@ import torch
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COMFY_ROOT = os.path.dirname(os.path.dirname(ROOT))
-for path in (ROOT, COMFY_ROOT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
 
-from comfy.ldm.sam3.tracker import pack_masks
 
-package = types.ModuleType("ComfyUI_Jakkanna")
-package.__path__ = [ROOT]
-sys.modules.setdefault(package.__name__, package)
-nodes_package = types.ModuleType("ComfyUI_Jakkanna.nodes")
-nodes_package.__path__ = [os.path.join(ROOT, "nodes")]
-sys.modules.setdefault(nodes_package.__name__, nodes_package)
-scail2_production = importlib.import_module("ComfyUI_Jakkanna.nodes.scail2_production")
+def pack_masks(masks):
+    binary = masks > 0
+    shifts = torch.arange(8, device=masks.device)
+    return (binary.view(*masks.shape[:-1], -1, 8) * (1 << shifts)).sum(-1).byte()
+
+
+def load_scail2_production_module():
+    package = types.ModuleType("ComfyUI_Jakkanna")
+    package.__path__ = [ROOT]
+    sys.modules[package.__name__] = package
+    nodes_package = types.ModuleType("ComfyUI_Jakkanna.nodes")
+    nodes_package.__path__ = [os.path.join(ROOT, "nodes")]
+    sys.modules[nodes_package.__name__] = nodes_package
+
+    folder_paths = types.ModuleType("folder_paths")
+    folder_paths.folder_names_and_paths = {}
+    folder_paths.get_temp_directory = tempfile.gettempdir
+    sys.modules["folder_paths"] = folder_paths
+
+    comfy = types.ModuleType("comfy")
+    comfy.__path__ = []
+    model_management = types.ModuleType("comfy.model_management")
+    model_sampling = types.ModuleType("comfy.model_sampling")
+    samplers = types.ModuleType("comfy.samplers")
+    comfy.model_management = model_management
+    comfy.model_sampling = model_sampling
+    comfy.samplers = samplers
+    sys.modules["comfy"] = comfy
+    sys.modules["comfy.model_management"] = model_management
+    sys.modules["comfy.model_sampling"] = model_sampling
+    sys.modules["comfy.samplers"] = samplers
+
+    ldm = types.ModuleType("comfy.ldm")
+    ldm.__path__ = []
+    sam3 = types.ModuleType("comfy.ldm.sam3")
+    sam3.__path__ = []
+    tracker = types.ModuleType("comfy.ldm.sam3.tracker")
+
+    def unpack_masks(packed):
+        bits = torch.tensor(
+            [1, 2, 4, 8, 16, 32, 64, 128],
+            dtype=torch.uint8,
+            device=packed.device,
+        )
+        return (packed.unsqueeze(-1) & bits).bool().view(*packed.shape[:-1], -1)
+
+    tracker.unpack_masks = unpack_masks
+    sys.modules["comfy.ldm"] = ldm
+    sys.modules["comfy.ldm.sam3"] = sam3
+    sys.modules["comfy.ldm.sam3.tracker"] = tracker
+
+    flow_unipc = types.ModuleType("ComfyUI_Jakkanna.nodes.scail2_flow_unipc")
+    flow_unipc.FlowUniPCMultistepScheduler = object
+    sys.modules[flow_unipc.__name__] = flow_unipc
+    return importlib.import_module("ComfyUI_Jakkanna.nodes.scail2_production")
+
+
+scail2_production = load_scail2_production_module()
 
 
 class TensorVideo:
