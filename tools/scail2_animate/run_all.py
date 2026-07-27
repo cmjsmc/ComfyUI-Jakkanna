@@ -57,16 +57,22 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_identity(image_hash: str, fbx_hash: str, settings: dict, commit: str) -> str:
+def run_identity(image_hash: str, fbx_hash: str, settings: dict, identity: str) -> str:
     payload = {
         "image_sha256": image_hash,
         "fbx_sha256": fbx_hash,
         "settings": settings,
-        "jakkanna_commit": commit,
+        "jakkanna_release_identity": identity,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def fit_cache_key(image_hash: str, identity: str, bbox_threshold: float) -> str:
+    return hashlib.sha256(
+        f"{image_hash}:{identity}:{bbox_threshold:g}".encode()
+    ).hexdigest()[:16]
 
 
 def existing_run_matches(
@@ -148,7 +154,7 @@ def main() -> None:
     review_dir = staging_dir / "review"
     review_dir.mkdir(parents=True, exist_ok=True)
 
-    fit_key = hashlib.sha256(f"{image_hash}:{commit}:{args.bbox_threshold:g}".encode()).hexdigest()[:16]
+    fit_key = fit_cache_key(image_hash, identity, args.bbox_threshold)
     fit_cache = output_root / "_fit_cache" / fit_key
     cached_pose = fit_cache / "pose.json"
     if not cached_pose.is_file():

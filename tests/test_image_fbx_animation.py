@@ -23,17 +23,47 @@ from _env import package_version, release_identity, safe_name
 
 
 class RunIdentityTests(unittest.TestCase):
-    def test_run_identity_covers_inputs_settings_and_commit(self):
+    def test_run_identity_covers_inputs_settings_and_release_identity(self):
         settings = {"frames": 81, "fps": 16.0, "root_motion": "preserve"}
-        baseline = run_all.run_identity("image", "fbx", settings, "commit")
+        baseline = run_all.run_identity("image", "fbx", settings, "1.3.0+commit")
 
-        self.assertEqual(baseline, run_all.run_identity("image", "fbx", dict(settings), "commit"))
-        self.assertNotEqual(baseline, run_all.run_identity("other", "fbx", settings, "commit"))
+        self.assertEqual(
+            baseline,
+            run_all.run_identity("image", "fbx", dict(settings), "1.3.0+commit"),
+        )
         self.assertNotEqual(
             baseline,
-            run_all.run_identity("image", "fbx", {**settings, "root_motion": "in_place"}, "commit"),
+            run_all.run_identity("other", "fbx", settings, "1.3.0+commit"),
         )
-        self.assertNotEqual(baseline, run_all.run_identity("image", "fbx", settings, "other"))
+        self.assertNotEqual(
+            baseline,
+            run_all.run_identity(
+                "image",
+                "fbx",
+                {**settings, "root_motion": "in_place"},
+                "1.3.0+commit",
+            ),
+        )
+        self.assertNotEqual(
+            baseline,
+            run_all.run_identity("image", "fbx", settings, "1.3.1+other"),
+        )
+
+    def test_fit_cache_key_covers_release_identity_and_threshold(self):
+        baseline = run_all.fit_cache_key("image", "1.3.0+commit", 0.8)
+
+        self.assertEqual(
+            baseline,
+            run_all.fit_cache_key("image", "1.3.0+commit", 0.8),
+        )
+        self.assertNotEqual(
+            baseline,
+            run_all.fit_cache_key("image", "1.3.1+other", 0.8),
+        )
+        self.assertNotEqual(
+            baseline,
+            run_all.fit_cache_key("image", "1.3.0+commit", 0.7),
+        )
 
     def test_existing_run_must_match_its_full_identity(self):
         settings = {"frames": 81, "fps": 16.0}
