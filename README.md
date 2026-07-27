@@ -171,7 +171,9 @@ The bundled
 [Greenfield Image + FBX workflow](workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
 reduces this path to three intended controls: reference image, FBX selection,
 and customization prompt. Its preparation, retargeting, framing, validation,
-sampling, and manifests run automatically. The current animation-directory
+sampling, and manifests run automatically. SAM 3.1 isolates the person before
+SAM 3D Body fitting and again after camera registration; the user does not
+provide or adjust either mask. The current animation-directory
 compatibility results are recorded in
 [the FBX input audit](docs/FBX_INPUT_AUDIT.md).
 The sibling

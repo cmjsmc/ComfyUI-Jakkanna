@@ -33,6 +33,10 @@ Queue the workflow after selecting those inputs. The collapsed nodes are the
 automatic preparation, validation, SCAIL-2 generation, and provenance pipeline;
 they do not need adjustment.
 
+SAM 3.1 isolates the person before SAM 3D Body fitting so scene objects do not
+distort the automatic body bounds. The same checkpoint segments the registered
+reference after fitting. No mask input or adjustment is required.
+
 Short FBX clips are automatically stretched to the 81-frame output. Clips at
 least five seconds long retain original speed and use their first five seconds.
 Root motion is preserved when it can be framed at a useful subject scale.
@@ -76,6 +80,7 @@ def greenfield_workflow(
 
     prepare_inputs = {
         "image": ["I1", 0],
+        "subject_mask": ["A2", 0],
         "fbx_file": fbx_file,
     }
     if camera_preset is not None:
@@ -83,6 +88,19 @@ def greenfield_workflow(
 
     return {
         "I1": ("LoadImage", {"image": image}),
+        "A1": ("SAM3_Detect", {
+            "model": ["S1", 0],
+            "image": ["I1", 0],
+            "conditioning": ["S2", 0],
+            "threshold": 0.5,
+            "refine_iterations": 2,
+            "individual_masks": True,
+        }),
+        "A2": ("JakkannaSCAIL2SingleSubjectMask", {
+            "masks": ["A1", 0],
+            "minimum_area_percent": 1.0,
+            "maximum_area_percent": 95.0,
+        }),
         "F1": ("JakkannaImageFBXPrepare", prepare_inputs),
         **graph,
     }
@@ -91,6 +109,8 @@ def greenfield_workflow(
 TITLES = {
     **make_workflow.TITLES,
     "I1": "1 · Reference image",
+    "A1": "Automatic original-image person segmentation",
+    "A2": "Single pre-fit subject gate",
     "F1": "2 · FBX animation",
     "P1": "3 · Customization prompt",
     "O2": "Review MP4",
@@ -102,6 +122,8 @@ COLUMNS = {
     "I1": 0,
     "F1": 0,
     "P1": 0,
+    "A1": 1,
+    "A2": 1,
     "N1": 1,
 }
 

@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMFY_NODE_CHANGELOG: >-
-        Adds a four-input image-and-FBX SCAIL-2 workflow with production-safe
-        full, American, medium, close, and Dutch-roll camera presets; binds the
-        selected preset to reference/driver registration, cache identity,
-        validation, and reproducibility manifests.
+        Uses the Greenfield workflow's shared SAM 3.1 person mask for
+        SAM 3D Body fitting, camera registration, cache identity, validation,
+        and provenance; removes false silhouette-IoU rejections while keeping
+        the metric as a diagnostic.
     steps:
       - name: Check out code
         uses: actions/checkout@v7

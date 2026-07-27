@@ -50,7 +50,7 @@
       "properties": {
         "Node name for S&R": "VNCCS_PoseStudio",
         "cnr_id": "jakkanna",
-        "ver": "1.4.0",
+        "ver": "1.4.1",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [

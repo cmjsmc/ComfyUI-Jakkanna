@@ -1,3 +1,18 @@
+# Version 1.4.1
+## Reliable Automatic Body Registration
+
+*   Used the Greenfield workflow's SAM 3.1 person segmentation as the exact
+    subject mask for SAM 3D Body fitting and frame-zero registration.
+*   Shared the SAM 3.1 loader and `person` conditioning across pre-fit and
+    registered-reference checks without adding another user control.
+*   Bound the subject mask to preprocessing cache identity, artifact
+    validation, and reproducibility manifests while retaining the existing
+    no-mask compatibility path.
+*   Removed false hard failures from the silhouette-IoU diagnostic and kept
+    strict single-subject, mask-geometry, driver-continuity, and canvas gates.
+*   Corrected camera-margin validation and verified the complete 81-frame
+    SCAIL-2 generation path with occluded and out-of-frame body parts.
+
 # Version 1.4.0
 ## Production-Safe Camera Presets
 

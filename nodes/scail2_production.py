@@ -16,13 +16,15 @@ import comfy.samplers
 import folder_paths
 from comfy.ldm.sam3.tracker import unpack_masks
 
-from ..camera_presets import AUTO_CAMERA_PRESET, camera_preset_spec
+from ..camera_presets import (
+    AUTO_CAMERA_PRESET,
+    camera_preset_spec,
+)
 from .pose_studio import _execution_state_signature
 from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
 
 UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
-_MINIMUM_PREPARED_VISIBLE_IOU = 0.65
 
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
@@ -691,6 +693,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
             raise ValueError("Prepared camera preset was silently replaced")
         if prepared.get("settings", {}).get("camera_preset", AUTO_CAMERA_PRESET) != requested_preset:
             raise ValueError("Prepared camera preset settings do not match registration provenance")
+        visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
 
         metrics = _track_metrics(masks)
         areas = metrics["areas"]
@@ -704,12 +707,6 @@ class JakkannaSCAIL2PreparedTrackValidate:
             allowed_border_clipping,
         )
 
-        visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
-        if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_PREPARED_VISIBLE_IOU:
-            raise ValueError(
-                f"Prepared frame-zero visible-subject IoU is {visible_iou!r}; "
-                f"minimum is {_MINIMUM_PREPARED_VISIBLE_IOU:.2f}"
-            )
         settings = prepared.get("settings", {})
         expected_settings = {
             "frames": frames,

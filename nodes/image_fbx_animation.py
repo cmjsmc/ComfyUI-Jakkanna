@@ -13,14 +13,17 @@ import torch
 import comfy.model_management
 import folder_paths
 
-from ..camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS, camera_preset_spec
+from ..camera_presets import (
+    AUTO_CAMERA_PRESET,
+    CAMERA_PRESETS,
+    camera_preset_spec,
+)
 
 
 _JAKKANNA_ROOT = Path(__file__).resolve().parents[1]
 _RUN_ALL = _JAKKANNA_ROOT / "tools" / "scail2_animate" / "run_all.py"
 _MINIMUM_IMAGE_EDGE = 720
 _MAXIMUM_IMAGE_PIXELS = 4096 * 4096
-_MINIMUM_VISIBLE_REGISTRATION_IOU = 0.65
 
 
 def _file_sha256(path):
@@ -123,6 +126,40 @@ def _write_source_image(image):
     }
 
 
+def _write_subject_mask(mask, width, height):
+    if not isinstance(mask, torch.Tensor) or mask.ndim != 3:
+        raise ValueError("Subject mask must provide a MASK tensor batch")
+    if tuple(mask.shape) != (1, height, width):
+        raise ValueError(
+            f"Subject mask must contain one {width}x{height} mask, got {tuple(mask.shape)}"
+        )
+    data = mask.detach().to(device="cpu", dtype=torch.float32)
+    if not torch.isfinite(data).all():
+        raise ValueError("Subject mask contains non-finite values")
+    if not torch.all((data == 0) | (data == 1)):
+        raise ValueError("Subject mask must be binary")
+    binary = data[0].to(torch.uint8).contiguous().numpy()
+    if not binary.any():
+        raise ValueError("Subject mask is empty")
+
+    binary_sha256 = hashlib.sha256(binary.tobytes()).hexdigest()
+    mask_dir = Path(folder_paths.get_input_directory()) / "jakkanna_animate" / "_subject_mask_cache"
+    mask_dir.mkdir(parents=True, exist_ok=True)
+    path = mask_dir / f"{binary_sha256}.png"
+    if path.exists():
+        cached = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if cached is None or not np.array_equal(cached > 127, binary > 0):
+            raise ValueError(f"Cached workflow subject mask does not match its content identity: {path}")
+    elif not cv2.imwrite(str(path), binary * 255):
+        raise RuntimeError(f"Failed to write workflow subject mask: {path}")
+    return path, {
+        "width": width,
+        "height": height,
+        "binary_sha256": binary_sha256,
+        "coverage": float(binary.mean()),
+    }
+
+
 def _load_rgb_image(path):
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if bgr is None:
@@ -167,6 +204,7 @@ class JakkannaImageFBXPrepare:
             },
             "optional": {
                 "camera_preset": (list(CAMERA_PRESETS), {"default": AUTO_CAMERA_PRESET}),
+                "subject_mask": ("MASK",),
             }
         }
 
@@ -176,11 +214,12 @@ class JakkannaImageFBXPrepare:
     CATEGORY = "Jakkanna/SCAIL-2"
     DESCRIPTION = (
         "Automatically fits one high-resolution subject, retargets the selected "
-        "input/animate FBX, and prepares the registered SCAIL-2 driver."
+        "input/animate FBX, and prepares the registered SCAIL-2 driver. A connected "
+        "subject mask guides the otherwise automatic body fit."
     )
 
     @classmethod
-    def VALIDATE_INPUTS(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
+    def VALIDATE_INPUTS(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET, subject_mask=None):
         try:
             _resolve_fbx(fbx_file)
             camera_preset_spec(camera_preset)
@@ -189,19 +228,27 @@ class JakkannaImageFBXPrepare:
         return True
 
     @classmethod
-    def IS_CHANGED(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
+    def IS_CHANGED(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET, subject_mask=None):
         try:
             return f"{_file_sha256(_resolve_fbx(fbx_file))}:{camera_preset}"
         except (OSError, ValueError):
             return float("nan")
 
-    def prepare(self, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
+    def prepare(self, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET, subject_mask=None):
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "Jakkanna image + FBX preparation requires an NVIDIA CUDA GPU"
             )
         camera_preset_spec(camera_preset)
         source_path, source_metadata = _write_source_image(image)
+        subject_mask_path = None
+        subject_mask_metadata = None
+        if subject_mask is not None:
+            subject_mask_path, subject_mask_metadata = _write_subject_mask(
+                subject_mask,
+                source_metadata["width"],
+                source_metadata["height"],
+            )
         fbx_path = _resolve_fbx(fbx_file)
         run_name = f"greenfield-{source_metadata['normalized_rgb8_sha256'][:12]}-{fbx_path.stem}"
 
@@ -222,6 +269,8 @@ class JakkannaImageFBXPrepare:
             "--skip-verify",
             "--result-file", str(result_path),
         ]
+        if subject_mask_path is not None:
+            command.extend(("--subject-mask", str(subject_mask_path)))
 
         comfy.model_management.unload_all_models()
         try:
@@ -252,20 +301,18 @@ class JakkannaImageFBXPrepare:
         report = json.loads(report_path.read_text())
         if report.get("schema") != "jakkanna.image_fbx_animation.v1":
             raise ValueError("Prepared run has an unsupported manifest schema")
-        visible_iou = report.get("registration", {}).get("frame0_subject_iou_visible")
-        if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_VISIBLE_REGISTRATION_IOU:
-            raise ValueError(
-                f"Automatic body registration is not reliable enough for SCAIL-2: "
-                f"visible frame-zero IoU={visible_iou!r}, required "
-                f"{_MINIMUM_VISIBLE_REGISTRATION_IOU:.2f}; use a clearer image with a "
-                "less occluded subject"
-            )
+        if subject_mask_path is not None:
+            prepared_mask = report.get("inputs", {}).get("subject_mask", {})
+            if prepared_mask.get("sha256") != _file_sha256(subject_mask_path):
+                raise ValueError("Prepared run subject mask does not match the workflow input")
         report["workflow_input"] = {
             **source_metadata,
             "fbx_file": fbx_path.relative_to(_animation_root().resolve()).as_posix(),
             "fbx_sha256": _file_sha256(fbx_path),
             "camera_preset": camera_preset,
         }
+        if subject_mask_metadata is not None:
+            report["workflow_input"]["subject_mask"] = subject_mask_metadata
 
         frames = report.get("settings", {}).get("frames")
         if frames != 81:

@@ -23,7 +23,12 @@ from _env import COMFY_ROOT, bootstrap, file_sha256, package_version, release_id
 
 bootstrap()
 
-from jakkanna_pack.camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS, camera_preset_spec
+from jakkanna_pack.camera_presets import (
+    AUTO_CAMERA_PRESET,
+    CAMERA_PRESETS,
+    camera_preset_spec,
+    resolve_camera_margin,
+)
 from fbx import FbxClip
 from mhr_rig import MhrRig
 from render import Rasteriser, camera_space, project
@@ -41,6 +46,7 @@ def write_image(path: Path, image: np.ndarray, parameters: list[int] | None = No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument("--subject-mask", type=Path)
     parser.add_argument("--fbx", type=Path, required=True)
     parser.add_argument("--fit", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -207,12 +213,14 @@ def main() -> None:
     version = args.jakkanna_version or package_version()
     identity = args.jakkanna_release_identity or release_identity()
     preset = camera_preset_spec(args.camera_preset)
-    camera_margin = args.margin if preset["margin"] is None else preset["margin"]
+    camera_margin = resolve_camera_margin(args.camera_preset, args.margin)
     roll_degrees = preset["roll_degrees"]
     vertical_fraction = preset["vertical_fraction"]
     run_id = args.run_id or args.run_dir.name
     if not args.image.is_file():
         raise FileNotFoundError(f"reference image does not exist: {args.image}")
+    if args.subject_mask is not None and not args.subject_mask.is_file():
+        raise FileNotFoundError(f"subject mask does not exist: {args.subject_mask}")
     if not args.fbx.is_file():
         raise FileNotFoundError(f"FBX animation does not exist: {args.fbx}")
     if not args.fit.is_file():
@@ -360,13 +368,27 @@ def main() -> None:
     overlay = np.clip(reference.astype(np.float32) * 0.55 + first.astype(np.float32) * 0.75, 0, 255)
     write_image(review_dir / "driver_frame0_over_reference.jpg", overlay.astype(np.uint8))
 
-    # How well frame 0 registers with the subject decides whether SCAIL-2 only has
-    # to change appearance or geometry as well. Segment the subject the same way
-    # the fit did, reproject it, and measure the overlap against driver frame 0.
-    from jakkanna_pack.jakkanna_sam3d.processing.birefnet_mask import auto_mask_bgr
+    # Record a diagnostic overlap score for the review overlay. This is not an
+    # execution gate: clothing, occlusion and intentional cropping change the
+    # photographed silhouette without invalidating the shared camera registration.
+    if args.subject_mask is not None:
+        subject_mask = cv2.imread(str(args.subject_mask), cv2.IMREAD_GRAYSCALE)
+        if subject_mask is None:
+            raise FileNotFoundError(f"could not read {args.subject_mask}")
+        if subject_mask.shape != photo.shape[:2]:
+            raise ValueError(
+                f"subject mask is {subject_mask.shape[1]}x{subject_mask.shape[0]}; "
+                f"reference image is {photo.shape[1]}x{photo.shape[0]}"
+            )
+        subject_mask = subject_mask > 127
+        subject_mask_source = "provided"
+    else:
+        from jakkanna_pack.jakkanna_sam3d.processing.birefnet_mask import auto_mask_bgr
 
-    subject_mask, _ = auto_mask_bgr(photo)
-    subject_sil = reproject_reference((subject_mask > 0.5).astype(np.uint8) * 255,
+        subject_mask, _ = auto_mask_bgr(photo)
+        subject_mask = subject_mask > 0.5
+        subject_mask_source = "birefnet"
+    subject_sil = reproject_reference(subject_mask.astype(np.uint8) * 255,
                                       fit, focal, principal, args.width, args.height,
                                       roll_degrees) > 127
     if subject_sil.ndim == 3:
@@ -386,13 +408,16 @@ def main() -> None:
             f"prepared output is incomplete: expected {args.frames} driver and mask frames, "
             f"got {len(driver_paths)} and {len(mask_paths)}"
         )
+    inputs = {
+        "image": source_input(args.image),
+        "fbx": source_input(args.fbx),
+    }
+    if args.subject_mask is not None:
+        inputs["subject_mask"] = source_input(args.subject_mask)
     manifest = {
         "schema": "jakkanna.image_fbx_animation.v1",
         "run_id": run_id,
-        "inputs": {
-            "image": source_input(args.image),
-            "fbx": source_input(args.fbx),
-        },
+        "inputs": inputs,
         "settings": {
             "frames": args.frames,
             "fps": args.fps,
@@ -421,6 +446,8 @@ def main() -> None:
             "camera_translation": fit.cam_t.tolist(),
             "frame0_subject_iou": iou,
             "frame0_subject_iou_visible": iou_visible,
+            "subject_mask_source": subject_mask_source,
+            "subject_mask_coverage": float(subject_mask.mean()),
             "preserved_root_motion_focal": preserved_focal,
             "camera_preset": {
                 "requested": args.camera_preset,

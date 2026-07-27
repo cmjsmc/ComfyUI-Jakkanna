@@ -10,6 +10,13 @@ The original photograph is not wired directly to SCAIL-2. It is reprojected
 through the fitted camera so the reference and driver share one canvas and
 frame-zero geometry.
 
+In the Greenfield workflows, the installed SAM 3.1 checkpoint first segments
+the `person` in the original photograph. That binary mask guides SAM 3D Body's
+body bounds and reconstruction, excluding scene objects such as vehicles or
+furniture. After camera registration, the same checkpoint segments the
+registered reference used by SCAIL-2. Both stages are automatic and require no
+mask editing or additional user input.
+
 ## Greenfield workflow
 
 The bundled
@@ -62,7 +69,7 @@ novel-view reconstruction or synthesis stage.
 - ComfyUI-VideoHelperSuite 1.7.9 or newer for the review MP4 and lossless FFV1
   master.
 - Approximately 30 GB for the seven SCAIL-2 generation files below, plus about
-  3 GB for SAM 3D Body and BiRefNet.
+  3 GB for SAM 3D Body and the optional BiRefNet fallback.
 
 Place the generation files at these exact paths:
 
@@ -76,14 +83,16 @@ Place the generation files at these exact paths:
 | `models/clip_vision/clip_vision_h.safetensors` | [Comfy-Org/Wan 2.1](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors) |
 | `models/vae/wan_2.1_vae.safetensors` | [Comfy-Org/Wan 2.1](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors) |
 
-The first preparation run downloads two auxiliary snapshots when they are not
+The first Greenfield preparation run downloads SAM 3D Body when it is not
 already installed:
 
 - `jetjodh/sam-3d-body-dinov3` to `models/sam3dbody`;
-- `ZhengPeng7/BiRefNet_lite` to `models/birefnet/BiRefNet_lite`.
 
 This first-run network access is initiated only when the user queues the
-workflow. Subsequent runs use the local snapshots.
+workflow. Subsequent runs use the local snapshot. The standalone
+`run_all.py` command retains a BiRefNet fallback when `--subject-mask` is not
+provided; that fallback downloads `ZhengPeng7/BiRefNet_lite` to
+`models/birefnet/BiRefNet_lite`.
 
 Create `ComfyUI/input/animate`, copy compatible `.fbx` files into it, and
 refresh ComfyUI before selecting an animation. The reference image is selected
@@ -102,7 +111,9 @@ with the ordinary `Load Image` control and does not require a fixed filename.
   in-place and recorded as such in the manifest.
 
 Other skeleton profiles, ASCII FBX, multiple people, non-human subjects, and
-severely occluded people are rejected or outside the supported contract.
+references without enough visible torso and limb evidence for a body fit are
+rejected or outside the supported contract. Hidden or out-of-frame anatomy is
+inferred and should be described in the customization prompt.
 
 ## Prepare a run
 
