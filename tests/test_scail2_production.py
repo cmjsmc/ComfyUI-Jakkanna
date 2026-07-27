@@ -41,6 +41,25 @@ def load_scail2_production_module():
     model_management = types.ModuleType("comfy.model_management")
     model_sampling = types.ModuleType("comfy.model_sampling")
     samplers = types.ModuleType("comfy.samplers")
+    # Faithful reimplementation of the two upstream pieces the sigma check depends on.
+    # SamplerGateTests pins it against values read off a live ComfyUI, so a drift in
+    # either direction shows up as a test failure rather than a silently weaker check.
+    class ModelSamplingDiscreteFlow:
+        def set_parameters(self, shift=1.0, timesteps=1000, multiplier=1000):
+            self.shift = shift
+            t = torch.arange(1, timesteps + 1, 1) / timesteps
+            self.sigmas = shift * t / (1 + (shift - 1) * t)
+
+    def simple_scheduler(model_sampling_, steps):
+        s = model_sampling_.sigmas
+        ss = len(s) / steps
+        sigs = [float(s[-(1 + int(x * ss))]) for x in range(steps)]
+        sigs.append(0.0)
+        return torch.FloatTensor(sigs)
+
+    model_sampling.ModelSamplingDiscreteFlow = ModelSamplingDiscreteFlow
+    samplers.simple_scheduler = simple_scheduler
+
     comfy.model_management = model_management
     comfy.model_sampling = model_sampling
     comfy.samplers = samplers
@@ -602,6 +621,107 @@ class ManifestDigestReuseTests(unittest.TestCase):
         })
         with self.assertRaisesRegex(ValueError, "does not match the validated production input"):
             self._save(prepared)
+
+
+class SamplerGateTests(unittest.TestCase):
+    """Every mismatch the manifest used to report after VAE decode is knowable from the
+    prompt graph and the sigma schedule, so the gate has to catch it before sampling."""
+
+    def _prompt(self, **overrides):
+        prompt = {
+            "1": {"class_type": "BasicScheduler",
+                  "inputs": {"scheduler": "simple", "steps": 6, "denoise": 1.0}},
+            "2": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+            "3": {"class_type": "CFGGuider", "inputs": {"cfg": 1.0}},
+            "4": {"class_type": "WanSCAILToVideo",
+                  "inputs": {"replacement_mode": False, "pose_strength": 1.0,
+                             "pose_start": 0.0, "pose_end": 1.0}},
+            "5": {"class_type": "CLIPVisionEncode", "inputs": {"crop": "none"}},
+            "6": {"class_type": "LoraLoaderModelOnly",
+                  "inputs": {"lora_name": "dpo.safetensors", "strength_model": 1.0}},
+            "7": {"class_type": "LoraLoaderModelOnly",
+                  "inputs": {"lora_name": "accel.safetensors", "strength_model": 0.8}},
+            "8": {"class_type": "JakkannaSCAIL2ProductionManifest",
+                  "inputs": {"steps": 6, "cfg": 1.0, "mode": "animation",
+                             "sampler_name": "Euler",
+                             "scheduler_name": "simple (shift-8 flow schedule)",
+                             "flow_shift": 8.0, "effective_flow_shift": 0.0,
+                             "dpo_lora": "dpo.safetensors",
+                             "acceleration_lora": "accel.safetensors",
+                             "acceleration_lora_strength": 0.8}},
+        }
+        for node_id, inputs in overrides.items():
+            prompt[node_id]["inputs"].update(inputs)
+        return prompt
+
+    def _sigmas(self, shift=8.0, steps=6):
+        return scail2_production._simple_flow_sigmas(shift, steps)
+
+    def test_schedule_matches_a_live_comfyui(self):
+        # Read off a running ComfyUI for WAN21_SCAIL2, whose sampling_settings inherit
+        # WAN21_T2V shift=8.0. If upstream retunes that default this is where it shows.
+        self.assertEqual(
+            [round(float(s), 6) for s in self._sigmas()],
+            [1.0, 0.975724, 0.941259, 0.888889, 0.800479, 0.615952, 0.0],
+        )
+
+    def test_passes_a_consistent_graph_through_untouched(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        sigmas = self._sigmas()
+
+        passed, report_json = gate.validate(sigmas, self._prompt())
+
+        self.assertIs(passed, sigmas)
+        report = json.loads(report_json)
+        self.assertTrue(report["validated_before_sampling"])
+        self.assertEqual(report["steps"], 6)
+        self.assertEqual(report["mode"], "animation")
+        self.assertEqual(report["dpo_lora_strength"], 1.0)
+        self.assertEqual(report["effective_flow_shift"], 8.0)
+        self.assertEqual(report["sigma_schedule"][0], 1.0)
+        self.assertEqual(report["sigma_schedule"][-1], 0.0)
+
+    def test_rejects_a_schedule_built_at_the_wrong_shift(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "not the Euler/simple flow schedule"):
+            gate.validate(self._sigmas(shift=5.0), self._prompt())
+
+    def test_rejects_a_graph_whose_cfg_drifted_from_the_manifest(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "does not match CFGGuider"):
+            gate.validate(self._sigmas(), self._prompt(**{"3": {"cfg": 5.0}}))
+
+    def test_rejects_replacement_mode_declared_as_animation(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "does not match WanSCAILToVideo mode"):
+            gate.validate(self._sigmas(), self._prompt(**{"4": {"replacement_mode": True}}))
+
+    def test_rejects_an_acceleration_lora_at_an_undeclared_strength(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "acceleration LoRA strength"):
+            gate.validate(self._sigmas(), self._prompt(**{"7": {"strength_model": 0.5}}))
+
+    def test_rejects_a_second_scheduler(self):
+        prompt = self._prompt()
+        prompt["9"] = {"class_type": "BasicScheduler",
+                       "inputs": {"scheduler": "simple", "steps": 6}}
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "exactly one BasicScheduler"):
+            gate.validate(self._sigmas(), prompt)
+
+    def test_requires_the_executed_prompt_graph(self):
+        gate = scail2_production.JakkannaSCAIL2SamplerValidate()
+        with self.assertRaisesRegex(ValueError, "needs the executed prompt graph"):
+            gate.validate(self._sigmas(), None)
+
+    def test_gate_and_manifest_agree_because_they_share_one_reconciliation(self):
+        prompt = self._prompt(**{"3": {"cfg": 5.0}})
+        declared = scail2_production._declared_manifest_settings(prompt)
+
+        with self.assertRaisesRegex(ValueError, "does not match CFGGuider"):
+            scail2_production._resolve_sampler_graph(prompt, declared, self._sigmas())
+        with self.assertRaisesRegex(ValueError, "does not match CFGGuider"):
+            scail2_production._resolve_sampler_graph(prompt, declared, None)
 
 
 class ModelHashCacheTests(unittest.TestCase):

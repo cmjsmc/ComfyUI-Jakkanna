@@ -519,6 +519,14 @@ class GreenfieldWorkflowTests(unittest.TestCase):
     def test_registration_floor_is_wired_into_the_prepared_track_gate(self):
         self.assertEqual(self.graph["V3"][1]["minimum_registration_iou"], 0.35)
 
+    def test_sampler_gate_sits_between_the_schedule_and_the_sampler(self):
+        # Both the sampler and the manifest consume the gate's schedule, so the gate is
+        # on the execution path and a mismatch cannot be discovered after the decode.
+        self.assertEqual(self.graph["C9"][0], "JakkannaSCAIL2SamplerValidate")
+        self.assertEqual(self.graph["C9"][1]["sigmas"], ["C4", 0])
+        self.assertEqual(self.graph["C7"][1]["sigmas"], ["C9", 0])
+        self.assertEqual(self.graph["O4"][1]["sigmas"], ["C9", 0])
+
 
 class PreparationChildProcessTests(unittest.TestCase):
     """The preparation child holds its own CUDA context, so it must never outlive the node."""

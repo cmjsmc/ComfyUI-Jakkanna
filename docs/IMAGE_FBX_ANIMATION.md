@@ -197,6 +197,20 @@ prepared mask palette and continuity, embeds the preprocessing report, hashes
 the raw source/reference tensors, and writes review, FFV1 master, reference,
 and production-manifest outputs.
 
+### Sampler gate
+
+`Jakkanna SCAIL-2 Validate Sampler` sits between the scheduler and the sampler.
+It reconciles the sigma schedule, sampler, scheduler, CFG, generation mode and
+LoRA strengths against the settings the production manifest declares, then
+passes the schedule through unchanged.
+
+The manifest performs the same reconciliation when it is written, so a graph
+assembled without the gate is still checked. The difference is when: without
+the gate, a mismatch — a second `CLIPVisionEncode`, a CFG that drifted from the
+declared value, or a sigma schedule built at the wrong flow shift — surfaces
+only after the latent has been sampled and decoded. Both nodes share one
+implementation, so they cannot disagree.
+
 ### Registration gate
 
 `Jakkanna SCAIL-2 Validate Prepared Track` refuses to run generation when the

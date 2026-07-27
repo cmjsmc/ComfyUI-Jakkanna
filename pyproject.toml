@@ -62,6 +62,7 @@ NodeIds = [
     "JakkannaSCAIL2ProductionManifest",
     "JakkannaSCAIL2PreparedTrackValidate",
     "JakkannaSCAIL2ReferencePNG16Save",
+    "JakkannaSCAIL2SamplerValidate",
     "JakkannaSCAIL2SingleSubjectMask",
     "JakkannaSCAIL2TrackValidate",
     "JakkannaSCAIL2UpstreamNoise",

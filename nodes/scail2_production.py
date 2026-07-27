@@ -984,6 +984,185 @@ def _simple_flow_sigmas(shift, steps):
     return comfy.samplers.simple_scheduler(model_sampling, steps)
 
 
+_MANIFEST_DECLARED_SETTINGS = (
+    "steps",
+    "cfg",
+    "mode",
+    "sampler_name",
+    "scheduler_name",
+    "flow_shift",
+    "effective_flow_shift",
+    "dpo_lora",
+    "acceleration_lora",
+    "acceleration_lora_strength",
+)
+
+
+def _declared_manifest_settings(prompt):
+    """Read the settings the manifest node declares straight off the executed graph."""
+    node = _single_prompt_node(prompt, "JakkannaSCAIL2ProductionManifest")
+    return {
+        name: _literal_prompt_input(prompt, node, name)
+        for name in _MANIFEST_DECLARED_SETTINGS
+    }
+
+
+def _resolve_sampler_graph(prompt, declared, sigmas=None):
+    """Reconcile the executed graph against the manifest's declared sampler settings.
+
+    Not one of these mismatches needs a sampled latent to detect, which is why
+    JakkannaSCAIL2SamplerValidate runs this on the sigma schedule ahead of
+    SamplerCustomAdvanced. The manifest runs it again on the way out, so a graph
+    assembled without the gate is still checked - just later.
+    """
+    steps = declared["steps"]
+    flow_shift = declared["flow_shift"]
+    effective_flow_shift = declared["effective_flow_shift"] or 0.0
+    effective_shift = effective_flow_shift if effective_flow_shift > 0 else flow_shift
+
+    resolved = {
+        "sampler": declared["sampler_name"],
+        "scheduler": declared["scheduler_name"],
+        "steps": steps,
+        "cfg": declared["cfg"],
+        "mode": declared["mode"],
+        "effective_flow_shift": effective_shift,
+        "dpo_lora_strength": None,
+        "pose_settings": {"pose_strength": None, "pose_start": None, "pose_end": None},
+        "clip_vision_crop": None,
+        "sigma_schedule": None,
+    }
+
+    if sigmas is not None:
+        expected = _simple_flow_sigmas(effective_shift, steps)
+        wired = sigmas.detach().cpu().float()
+        if wired.shape != expected.shape or not torch.equal(wired, expected):
+            raise ValueError(
+                "Wired sigma schedule is not the Euler/simple flow schedule at "
+                f"effective_flow_shift={effective_shift:g} with {steps} steps: "
+                f"got {[round(float(s), 6) for s in wired]}, "
+                f"expected {[round(float(s), 6) for s in expected]}"
+            )
+        resolved["sigma_schedule"] = [float(s) for s in wired]
+
+    if not prompt:
+        return resolved
+
+    guider_node = _single_prompt_node(prompt, "CFGGuider")
+    scail_node = _single_prompt_node(prompt, "WanSCAILToVideo")
+    clip_vision_node = _single_prompt_node(prompt, "CLIPVisionEncode")
+
+    scheduler_nodes = _prompt_nodes(prompt, "BasicScheduler")
+    flow_unipc_nodes = _prompt_nodes(prompt, "JakkannaSCAIL2FlowUniPC")
+    if len(scheduler_nodes) + len(flow_unipc_nodes) != 1:
+        raise ValueError(
+            "Manifest requires exactly one BasicScheduler or "
+            f"JakkannaSCAIL2FlowUniPC node, got {len(scheduler_nodes) + len(flow_unipc_nodes)}"
+        )
+    if scheduler_nodes:
+        sampler_node = _single_prompt_node(prompt, "KSamplerSelect")
+        scheduler_node = scheduler_nodes[0][1]
+        resolved["scheduler"] = _literal_prompt_input(prompt, scheduler_node, "scheduler")
+        resolved["steps"] = _literal_prompt_input(prompt, scheduler_node, "steps")
+        resolved["sampler"] = _literal_prompt_input(prompt, sampler_node, "sampler_name")
+    else:
+        flow_unipc_node = flow_unipc_nodes[0][1]
+        resolved["scheduler"] = "upstream Flow-UniPC"
+        resolved["sampler"] = "Flow-UniPC"
+        resolved["steps"] = _literal_prompt_input(prompt, flow_unipc_node, "steps")
+        actual_flow_shift = _literal_prompt_input(prompt, flow_unipc_node, "shift")
+        if actual_flow_shift != flow_shift:
+            raise ValueError(
+                f"Manifest flow_shift={flow_shift:g} does not match "
+                f"JakkannaSCAIL2FlowUniPC shift={actual_flow_shift}"
+            )
+    resolved["cfg"] = _literal_prompt_input(prompt, guider_node, "cfg")
+    replacement_mode = bool(_literal_prompt_input(prompt, scail_node, "replacement_mode"))
+    resolved["mode"] = "replacement" if replacement_mode else "animation"
+    resolved["pose_settings"] = {
+        name: _literal_prompt_input(prompt, scail_node, name)
+        for name in ("pose_strength", "pose_start", "pose_end")
+    }
+    resolved["clip_vision_crop"] = _literal_prompt_input(prompt, clip_vision_node, "crop")
+
+    if resolved["steps"] != steps:
+        raise ValueError(
+            f"Manifest steps={steps} does not match BasicScheduler steps={resolved['steps']}"
+        )
+    if resolved["cfg"] != declared["cfg"]:
+        raise ValueError(
+            f"Manifest cfg={declared['cfg']:g} does not match CFGGuider cfg={resolved['cfg']}"
+        )
+    if resolved["mode"] != declared["mode"]:
+        raise ValueError(
+            f"Manifest mode={declared['mode']} does not match "
+            f"WanSCAILToVideo mode={resolved['mode']}"
+        )
+    if str(resolved["sampler"]).lower() != str(declared["sampler_name"]).lower():
+        raise ValueError(
+            f"Manifest sampler={declared['sampler_name']} does not match "
+            f"KSamplerSelect sampler={resolved['sampler']}"
+        )
+
+    for _, lora_node in _prompt_nodes(prompt, "LoraLoaderModelOnly"):
+        name = _literal_prompt_input(prompt, lora_node, "lora_name")
+        strength = _literal_prompt_input(prompt, lora_node, "strength_model")
+        if name == declared["dpo_lora"]:
+            resolved["dpo_lora_strength"] = strength
+        if name == declared["acceleration_lora"] and strength != declared["acceleration_lora_strength"]:
+            raise ValueError(
+                f"Manifest acceleration LoRA strength={declared['acceleration_lora_strength']:g} "
+                f"does not match the loader strength={strength}"
+            )
+    if resolved["dpo_lora_strength"] is None:
+        raise ValueError(
+            f"Could not find the DPO LoRA loader in the prompt graph: {declared['dpo_lora']}"
+        )
+
+    return resolved
+
+
+class JakkannaSCAIL2SamplerValidate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"sigmas": ("SIGMAS",)},
+            "hidden": {"prompt": "PROMPT"},
+        }
+
+    RETURN_TYPES = ("SIGMAS", "STRING")
+    RETURN_NAMES = ("sigmas", "sampler_report")
+    FUNCTION = "validate"
+    CATEGORY = "Jakkanna/SCAIL-2"
+    DESCRIPTION = (
+        "Cross-checks the sigma schedule, sampler, scheduler, CFG, mode and LoRA "
+        "strengths against the production manifest's declared settings, and passes the "
+        "schedule through unchanged. Wire it between the scheduler and the sampler so a "
+        "mismatch stops the run before sampling rather than after the manifest is saved."
+    )
+
+    def validate(self, sigmas, prompt=None):
+        if not prompt:
+            raise ValueError(
+                "Sampler validation needs the executed prompt graph, which ComfyUI "
+                "supplies only when the workflow is queued"
+            )
+        resolved = _resolve_sampler_graph(prompt, _declared_manifest_settings(prompt), sigmas)
+        report = {
+            "validated_before_sampling": True,
+            "sampler": resolved["sampler"],
+            "scheduler": resolved["scheduler"],
+            "steps": resolved["steps"],
+            "cfg": resolved["cfg"],
+            "mode": resolved["mode"],
+            "effective_flow_shift": resolved["effective_flow_shift"],
+            "dpo_lora_strength": resolved["dpo_lora_strength"],
+            "sigma_schedule": resolved["sigma_schedule"],
+            **resolved["pose_settings"],
+        }
+        return sigmas, _json(report)
+
+
 class JakkannaSCAIL2ProductionManifest:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1077,19 +1256,24 @@ class JakkannaSCAIL2ProductionManifest:
         prompt=None,
         extra_pnginfo=None,
     ):
-        effective_shift = effective_flow_shift if effective_flow_shift > 0 else flow_shift
-        sigma_schedule = None
-        if sigmas is not None:
-            expected = _simple_flow_sigmas(effective_shift, steps)
-            wired = sigmas.detach().cpu().float()
-            if wired.shape != expected.shape or not torch.equal(wired, expected):
-                raise ValueError(
-                    "Wired sigma schedule is not the Euler/simple flow schedule at "
-                    f"effective_flow_shift={effective_shift:g} with {steps} steps: "
-                    f"got {[round(float(s), 6) for s in wired]}, "
-                    f"expected {[round(float(s), 6) for s in expected]}"
-                )
-            sigma_schedule = [float(s) for s in wired]
+        # JakkannaSCAIL2SamplerValidate runs exactly this reconciliation on the schedule
+        # before sampling. Repeating it here keeps a graph assembled without that gate
+        # honest, and pins the resolved values into the manifest.
+        declared = {
+            "steps": steps,
+            "cfg": cfg,
+            "mode": mode,
+            "sampler_name": sampler_name,
+            "scheduler_name": scheduler_name,
+            "flow_shift": flow_shift,
+            "effective_flow_shift": effective_flow_shift,
+            "dpo_lora": dpo_lora,
+            "acceleration_lora": acceleration_lora,
+            "acceleration_lora_strength": acceleration_lora_strength,
+        }
+        resolved = _resolve_sampler_graph(prompt, declared, sigmas)
+        effective_shift = resolved["effective_flow_shift"]
+        sigma_schedule = resolved["sigma_schedule"]
 
         actual_attention_backend = _attention_backend()
 
@@ -1141,80 +1325,14 @@ class JakkannaSCAIL2ProductionManifest:
 
         graph_settings = _graph_settings(prompt)
         graph_artifacts = _graph_artifacts(prompt, hash_model_files)
-        actual_sampler = sampler_name
-        actual_scheduler = scheduler_name
-        actual_steps = steps
-        actual_cfg = cfg
-        actual_mode = mode
-        dpo_lora_strength = None
-        actual_pose_settings = {
-            "pose_strength": None,
-            "pose_start": None,
-            "pose_end": None,
-        }
-        clip_vision_crop = None
-
-        if prompt:
-            guider_node = _single_prompt_node(prompt, "CFGGuider")
-            scail_node = _single_prompt_node(prompt, "WanSCAILToVideo")
-            clip_vision_node = _single_prompt_node(prompt, "CLIPVisionEncode")
-
-            scheduler_nodes = _prompt_nodes(prompt, "BasicScheduler")
-            flow_unipc_nodes = _prompt_nodes(prompt, "JakkannaSCAIL2FlowUniPC")
-            if len(scheduler_nodes) + len(flow_unipc_nodes) != 1:
-                raise ValueError(
-                    "Manifest requires exactly one BasicScheduler or "
-                    f"JakkannaSCAIL2FlowUniPC node, got {len(scheduler_nodes) + len(flow_unipc_nodes)}"
-                )
-            if scheduler_nodes:
-                sampler_node = _single_prompt_node(prompt, "KSamplerSelect")
-                scheduler_node = scheduler_nodes[0][1]
-                actual_scheduler = _literal_prompt_input(prompt, scheduler_node, "scheduler")
-                actual_steps = _literal_prompt_input(prompt, scheduler_node, "steps")
-                actual_sampler = _literal_prompt_input(prompt, sampler_node, "sampler_name")
-            else:
-                flow_unipc_node = flow_unipc_nodes[0][1]
-                actual_scheduler = "upstream Flow-UniPC"
-                actual_sampler = "Flow-UniPC"
-                actual_steps = _literal_prompt_input(prompt, flow_unipc_node, "steps")
-                actual_flow_shift = _literal_prompt_input(prompt, flow_unipc_node, "shift")
-                if actual_flow_shift != flow_shift:
-                    raise ValueError(
-                        f"Manifest flow_shift={flow_shift:g} does not match "
-                        f"JakkannaSCAIL2FlowUniPC shift={actual_flow_shift}"
-                    )
-            actual_cfg = _literal_prompt_input(prompt, guider_node, "cfg")
-            replacement_mode = bool(_literal_prompt_input(prompt, scail_node, "replacement_mode"))
-            actual_mode = "replacement" if replacement_mode else "animation"
-            actual_pose_settings = {
-                name: _literal_prompt_input(prompt, scail_node, name)
-                for name in ("pose_strength", "pose_start", "pose_end")
-            }
-            clip_vision_crop = _literal_prompt_input(prompt, clip_vision_node, "crop")
-
-            if actual_steps != steps:
-                raise ValueError(f"Manifest steps={steps} does not match BasicScheduler steps={actual_steps}")
-            if actual_cfg != cfg:
-                raise ValueError(f"Manifest cfg={cfg:g} does not match CFGGuider cfg={actual_cfg}")
-            if actual_mode != mode:
-                raise ValueError(f"Manifest mode={mode} does not match WanSCAILToVideo mode={actual_mode}")
-            if str(actual_sampler).lower() != str(sampler_name).lower():
-                raise ValueError(
-                    f"Manifest sampler={sampler_name} does not match KSamplerSelect sampler={actual_sampler}"
-                )
-
-            for _, lora_node in _prompt_nodes(prompt, "LoraLoaderModelOnly"):
-                name = _literal_prompt_input(prompt, lora_node, "lora_name")
-                strength = _literal_prompt_input(prompt, lora_node, "strength_model")
-                if name == dpo_lora:
-                    dpo_lora_strength = strength
-                if name == acceleration_lora and strength != acceleration_lora_strength:
-                    raise ValueError(
-                        f"Manifest acceleration LoRA strength={acceleration_lora_strength:g} "
-                        f"does not match the loader strength={strength}"
-                    )
-            if dpo_lora_strength is None:
-                raise ValueError(f"Could not find the DPO LoRA loader in the prompt graph: {dpo_lora}")
+        actual_sampler = resolved["sampler"]
+        actual_scheduler = resolved["scheduler"]
+        actual_steps = resolved["steps"]
+        actual_cfg = resolved["cfg"]
+        actual_mode = resolved["mode"]
+        dpo_lora_strength = resolved["dpo_lora_strength"]
+        actual_pose_settings = resolved["pose_settings"]
+        clip_vision_crop = resolved["clip_vision_crop"]
 
         model_files = {
             "diffusion_model": ("diffusion_models", diffusion_model),
@@ -1351,6 +1469,7 @@ class JakkannaSCAIL2ProductionManifest:
 NODE_CLASS_MAPPINGS = {
     "JakkannaSCAIL2FlowUniPC": JakkannaSCAIL2FlowUniPC,
     "JakkannaSCAIL2ProductionInputValidate": JakkannaSCAIL2ProductionInputValidate,
+    "JakkannaSCAIL2SamplerValidate": JakkannaSCAIL2SamplerValidate,
     "JakkannaSCAIL2SingleSubjectMask": JakkannaSCAIL2SingleSubjectMask,
     "JakkannaSCAIL2ReferencePNG16Save": JakkannaSCAIL2ReferencePNG16Save,
     "JakkannaSCAIL2TrackValidate": JakkannaSCAIL2TrackValidate,
@@ -1362,6 +1481,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "JakkannaSCAIL2FlowUniPC": "Jakkanna SCAIL-2 Flow-UniPC",
     "JakkannaSCAIL2ProductionInputValidate": "Jakkanna SCAIL-2 Validate Input",
+    "JakkannaSCAIL2SamplerValidate": "Jakkanna SCAIL-2 Validate Sampler",
     "JakkannaSCAIL2SingleSubjectMask": "Jakkanna SCAIL-2 Validate Subject Mask",
     "JakkannaSCAIL2ReferencePNG16Save": "Jakkanna SCAIL-2 Save 16-bit Reference",
     "JakkannaSCAIL2TrackValidate": "Jakkanna SCAIL-2 Validate Track",

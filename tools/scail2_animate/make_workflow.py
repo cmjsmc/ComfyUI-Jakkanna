@@ -184,9 +184,13 @@ def workflow(
             "noise": ["C6", 0],
             "guider": ["C2", 0],
             "sampler": ["C3", 0],
-            "sigmas": ["C4", 0],
+            "sigmas": ["C9", 0],
             "latent_image": ["C1", 2],
         }),
+        # Sits between the schedule and the sampler so a sampler/scheduler/CFG/LoRA
+        # mismatch stops the run here, rather than after the sampled latent has been
+        # decoded and the manifest is being written.
+        "C9": ("JakkannaSCAIL2SamplerValidate", {"sigmas": ["C4", 0]}),
         "C8": ("VAEDecode", {"samples": ["C7", 1], "vae": ["W7", 0]}),
 
         "O1": ("CreateVideo", {
@@ -249,7 +253,7 @@ def workflow(
             "cfg": 1.0,
             "effective_flow_shift": 0.0,
             "mode": "animation",
-            "sigmas": ["C4", 0],
+            "sigmas": ["C9", 0],
             "source_images": ["D1", 0],
             "reference_image": ["R2", 0],
             "preprocess_report": ["P0", 0],
@@ -273,6 +277,7 @@ TITLES = {
     "V3": "Prepared batch, track, palette, and provenance gate",
     "C1": "SCAIL-2 animation mode",
     "C4": "Six-step native shift-8 schedule",
+    "C9": "Pre-sampling sampler and schedule gate",
     "O2": "Review MP4",
     "O3": "Lossless FFV1 master",
     "O4": "Production manifest",
@@ -282,7 +287,7 @@ COLUMNS = {
     **{name: 0 for name in ("R1", "D1", "D2", "P0", "P1", "N1")},
     **{name: 1 for name in ("S1", "S2", "S3", "S4", "M1", "M2", "M3", "M4", "B1", "R2", "R3")},
     **{name: 2 for name in ("V3", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9")},
-    **{name: 3 for name in ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")},
+    **{name: 3 for name in ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9")},
     **{name: 4 for name in ("O1", "O2", "O3", "O4", "Q1", "Q2", "Q3")},
 }
 
