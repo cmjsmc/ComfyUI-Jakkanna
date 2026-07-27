@@ -155,6 +155,8 @@ def _validate_pose_data(data):
         raise ValueError("export.animation_start_seconds must be between 0 and 86400")
     if export.get("animation_timing", "FIT_CLIP") not in ("REALTIME", "FIT_CLIP"):
         raise ValueError("export.animation_timing must be REALTIME or FIT_CLIP")
+    if export.get("animation_root_motion", "PRESERVE") not in ("PRESERVE", "IN_PLACE"):
+        raise ValueError("export.animation_root_motion must be PRESERVE or IN_PLACE")
     output_mode = export.get("output_mode", "LIST")
     if output_mode not in ("LIST", "GRID"):
         raise ValueError("export.output_mode must be LIST or GRID")
@@ -254,10 +256,12 @@ def _validate_pose_data(data):
     if animation is not None:
         if not isinstance(animation, dict):
             raise ValueError("animation must be an object")
-        for name in ("file_name", "file_sha256", "clip_name", "skeleton_profile", "timing_mode"):
+        for name in ("file_name", "file_sha256", "clip_name", "skeleton_profile", "timing_mode", "root_motion"):
             value = animation.get(name)
             if value is not None and (not isinstance(value, str) or len(value) > 512):
                 raise ValueError(f"animation.{name} must be a string of at most 512 characters")
+        if animation.get("root_motion", "preserved") not in ("preserved", "in_place"):
+            raise ValueError("animation.root_motion must be preserved or in_place")
         if "duration_seconds" in animation and _finite_number(animation["duration_seconds"], "animation.duration_seconds") < 0:
             raise ValueError("animation.duration_seconds must be non-negative")
         for name in ("source_start_seconds", "sample_interval_seconds"):

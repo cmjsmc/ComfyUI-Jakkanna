@@ -144,6 +144,9 @@ The animation controls default to 81 frames at 16 fps:
 * **REALTIME** samples at exact `1 / fps` intervals from the selected start
   time. An 81-frame sequence at 16 fps requires source animation through
   5.000 seconds; shorter clips fail instead of being stretched silently.
+* **PRESERVE** root motion retains the FBX pelvis translation on the Jakkanna
+  mannequin. Use **IN_PLACE** only when the downstream animation is
+  intentionally stationary.
 
 The bundled [Fast](workflows/Jakkanna%20Krea%202%20SCAIL%202%20Animate%20Fast.json)
 and [Production](workflows/Jakkanna%20Krea%202%20SCAIL%202%20Animate%20Production.json)

@@ -2762,6 +2762,7 @@ class PoseStudioWidget {
             animation_fps: 16,
             animation_start_seconds: 0,
             animation_timing: "REALTIME",
+            animation_root_motion: "PRESERVE",
             bg_color: [255, 255, 255],
             debugMode: false,
             debugPortraitMode: false, // Focus on upper body in debug mode
@@ -3522,6 +3523,11 @@ class PoseStudioWidget {
             "Animation Timing", "animation_timing", ["REALTIME", "FIT_CLIP"]
         );
         exportSection.content.appendChild(animationTimingField);
+
+        const animationRootMotionField = this.createSelectField(
+            "Root Motion", "animation_root_motion", ["PRESERVE", "IN_PLACE"]
+        );
+        exportSection.content.appendChild(animationRootMotionField);
 
         const colorField = this.createColorField("Background", "bg_color");
         exportSection.content.appendChild(colorField);
@@ -6456,6 +6462,7 @@ class PoseStudioWidget {
                         frameCount: this.exportParams.animation_frames,
                         startTime: this.exportParams.animation_start_seconds,
                         timingMode: this.exportParams.animation_timing,
+                        preserveRootMotion: this.exportParams.animation_root_motion !== "IN_PLACE",
                     });
 
                     if (result.poses.length > JAKKANNA_POSE_MAX_COUNT) {

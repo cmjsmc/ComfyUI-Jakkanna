@@ -244,6 +244,7 @@ class PoseDataValidationTests(unittest.TestCase):
                 "animation_fps": 16,
                 "animation_start_seconds": 0,
                 "animation_timing": "REALTIME",
+                "animation_root_motion": "PRESERVE",
             },
         })
 
@@ -251,6 +252,12 @@ class PoseDataValidationTests(unittest.TestCase):
             self.pose_studio._validate_pose_data({
                 "poses": [{}],
                 "export": {"animation_timing": "STRETCH"},
+            })
+
+        with self.assertRaisesRegex(ValueError, "PRESERVE or IN_PLACE"):
+            self.pose_studio._validate_pose_data({
+                "poses": [{}],
+                "export": {"animation_root_motion": "SIDEWAYS"},
             })
 
         self.pose_studio._validate_pose_data({
@@ -574,14 +581,19 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("animation_frames: 81", studio)
         self.assertIn("animation_fps: 16", studio)
         self.assertIn('animation_timing: "REALTIME"', studio)
+        self.assertIn('animation_root_motion: "PRESERVE"', studio)
         self.assertIn("frameCount: this.exportParams.animation_frames", studio)
         self.assertIn('input.placeholder = "Auto"', studio)
         self.assertIn("loadedExport.animation_frames = null", studio)
         self.assertIn("fps: this.exportParams.animation_fps", studio)
+        self.assertIn('preserveRootMotion: this.exportParams.animation_root_motion !== "IN_PLACE"', studio)
         self.assertIn("animation: this.animationMetadata", studio)
         self.assertIn("this.reconcileAnimationMetadata();", studio)
         self.assertIn("this.invalidateAnimationMetadata();", studio)
         self.assertIn("if (!this.animationMetadata)", studio)
+        with open(os.path.join(ROOT, "web", "jakkanna_mixamo_import.js"), "r", encoding="utf-8") as handle:
+            mixamo = handle.read()
+        self.assertIn('root_motion: preserveRootMotion ? "preserved" : "in_place"', mixamo)
 
     def test_pose_studio_builds_realityscan_turntable_without_duplicate_endpoint(self):
         with open(os.path.join(ROOT, "web", "jakkanna_pose_studio.js"), "r", encoding="utf-8") as handle:
