@@ -243,6 +243,28 @@ An empty prompt is permitted, but then SCAIL-2 chooses the scene and unseen
 appearance. Cropped photographs necessarily leave missing anatomy or clothing
 for the model to synthesize.
 
+## Retiring superseded runs
+
+Preparation is content-addressed on the inputs, the settings, and the Jakkanna
+release identity. Keying on the release means a commit that cannot change a
+pixel still mints a fresh run directory, so `input/jakkanna_animate` grows by
+one full 81-frame render per commit per input combination.
+
+The runs are not interchangeable — outputs from different commits genuinely
+differ — so `tools/scail2_animate/prune_runs.py` retires superseded ones rather
+than deduplicating. It keeps the most recent run for every combination of
+inputs and settings, and never touches a run that a workflow JSON still loads.
+
+```bash
+~/Code/ComfyUI/.venv/bin/python \
+  custom_nodes/ComfyUI-Jakkanna/tools/scail2_animate/prune_runs.py
+```
+
+It is a dry run by default and prints exactly what it would keep and retire.
+Add `--apply` to perform it, or `--keep 2` to retain a generation of history per
+combination. Normalised inputs under `_source_cache` and `_subject_mask_cache`
+that no surviving run refers to are reported and removed alongside.
+
 ## Provenance
 
 `preprocess_manifest.json` contains:

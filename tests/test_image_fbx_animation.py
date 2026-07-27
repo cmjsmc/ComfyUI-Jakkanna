@@ -24,6 +24,7 @@ import build_driver
 import camera_presets
 import make_greenfield_workflow
 import make_workflow
+import prune_runs
 import render
 import run_all
 import workflow_builder
@@ -526,6 +527,68 @@ class GreenfieldWorkflowTests(unittest.TestCase):
         self.assertEqual(self.graph["C9"][1]["sigmas"], ["C4", 0])
         self.assertEqual(self.graph["C7"][1]["sigmas"], ["C9", 0])
         self.assertEqual(self.graph["O4"][1]["sigmas"], ["C9", 0])
+
+
+class PruneSelectionTests(unittest.TestCase):
+    """This selection decides what gets deleted, and a prepared run costs a body fit
+    plus an 81-frame render to rebuild."""
+
+    def _run(self, name, mtime, key="a", size=1):
+        return {"path": Path("/runs") / name, "mtime": mtime, "size": size,
+                "identity": "1.4.0+abc", "key": key, "image": None, "subject_mask": None}
+
+    def test_keeps_the_newest_run_of_each_input_combination(self):
+        newest = self._run("new", 200)
+        older = self._run("old", 100)
+
+        kept, retire = prune_runs.select([older, newest], keep=1, workflow_text="")
+
+        self.assertEqual([r["path"].name for r in kept], ["new"])
+        self.assertEqual([r["path"].name for r in retire], ["old"])
+        self.assertEqual(kept[0]["reason"], "newest")
+
+    def test_never_retires_a_run_a_workflow_still_loads(self):
+        newest = self._run("new", 200)
+        older = self._run("cited", 100)
+
+        kept, retire = prune_runs.select(
+            [older, newest], keep=1,
+            workflow_text='{"directory": "jakkanna_animate/cited/driver"}',
+        )
+
+        self.assertEqual(retire, [])
+        self.assertEqual(
+            sorted((r["path"].name, r["reason"]) for r in kept),
+            [("cited", "referenced by a workflow"), ("new", "newest")],
+        )
+
+    def test_different_settings_are_never_pruned_against_each_other(self):
+        # The no-mask and mask-guided fits of one image are separate combinations.
+        runs = [self._run("nomask", 100, key="a"), self._run("mask", 200, key="b")]
+
+        kept, retire = prune_runs.select(runs, keep=1, workflow_text="")
+
+        self.assertEqual(retire, [])
+        self.assertEqual(len(kept), 2)
+
+    def test_keep_retains_a_generation_of_history(self):
+        runs = [self._run(f"r{i}", i) for i in range(4)]
+
+        kept, retire = prune_runs.select(runs, keep=2, workflow_text="")
+
+        self.assertEqual(sorted(r["path"].name for r in kept), ["r2", "r3"])
+        self.assertEqual(sorted(r["path"].name for r in retire), ["r0", "r1"])
+
+    def test_identity_settings_mirror_the_run_identity_hash(self):
+        # If run_all starts hashing a setting this does not group on, two runs that
+        # differ in it would look interchangeable and one would be deleted.
+        settings = {
+            "frames": 81, "fps": 16.0, "start_seconds": 0.0, "timing": "auto",
+            "width": 704, "height": 1280, "framing": "full_body",
+            "camera_preset": "Auto Director", "margin": 0.06, "ease_frames": 12,
+            "root_motion": "auto", "supersample": 3, "bbox_threshold": 0.8,
+        }
+        self.assertEqual(set(prune_runs.IDENTITY_SETTINGS), set(settings))
 
 
 class PreparationChildProcessTests(unittest.TestCase):
