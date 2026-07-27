@@ -20,6 +20,7 @@ from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
 
 UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
+_MINIMUM_PREPARED_VISIBLE_IOU = 0.65
 
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
@@ -666,6 +667,12 @@ class JakkannaSCAIL2PreparedTrackValidate:
             raise ValueError("Prepared input report is not valid JSON") from error
         if prepared.get("schema") != "jakkanna.image_fbx_animation.v1":
             raise ValueError("Prepared input report has an unsupported schema")
+        visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
+        if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_PREPARED_VISIBLE_IOU:
+            raise ValueError(
+                f"Prepared frame-zero visible-subject IoU is {visible_iou!r}; "
+                f"minimum is {_MINIMUM_PREPARED_VISIBLE_IOU:.2f}"
+            )
         settings = prepared.get("settings", {})
         expected_settings = {
             "frames": frames,
@@ -702,6 +709,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "objects": 1,
             "source": "prepared_render",
             "preprocess_run_id": prepared.get("run_id"),
+            "frame0_subject_iou_visible": visible_iou,
             "tracking_mask_resolution": [width, height],
             "source_canvas_resolution": [width, height],
             "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),

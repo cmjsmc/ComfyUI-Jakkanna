@@ -36,14 +36,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=81)
     parser.add_argument("--fps", type=float, default=16.0)
     parser.add_argument("--start", type=float, default=0.0)
+    parser.add_argument("--timing", choices=("original_speed", "auto", "fit_clip"), default="original_speed")
     parser.add_argument("--framing", choices=("full_body", "reference_crop"), default="full_body")
     parser.add_argument("--margin", type=float, default=0.06)
     parser.add_argument("--ease-frames", type=int, default=12)
-    parser.add_argument("--root-motion", choices=("preserve", "in_place"), default="preserve")
+    parser.add_argument("--root-motion", choices=("preserve", "in_place", "auto"), default="preserve")
     parser.add_argument("--supersample", type=int, default=3)
     parser.add_argument("--bbox-threshold", type=float, default=0.8)
     parser.add_argument("--output-root", type=Path, default=RUN_ROOT)
     parser.add_argument("--skip-verify", action="store_true")
+    parser.add_argument("--result-file", type=Path)
     return parser.parse_args()
 
 
@@ -72,9 +74,16 @@ def existing_run_matches(
         and manifest.get("run_id") == run_id
         and manifest.get("inputs", {}).get("image", {}).get("sha256") == image_hash
         and manifest.get("inputs", {}).get("fbx", {}).get("sha256") == fbx_hash
-        and manifest.get("settings") == settings
+        and all(manifest.get("settings", {}).get(name) == value for name, value in settings.items())
         and manifest.get("software", {}).get("jakkanna_commit") == commit
     )
+
+
+def write_result(path: Path | None, run_dir: Path) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_dir": str(run_dir)}, sort_keys=True) + "\n")
 
 
 def main() -> None:
@@ -96,6 +105,7 @@ def main() -> None:
         "frames": args.frames,
         "fps": args.fps,
         "start_seconds": args.start,
+        "timing": args.timing,
         "width": args.width,
         "height": args.height,
         "framing": args.framing,
@@ -115,6 +125,7 @@ def main() -> None:
         if not existing_run_matches(manifest, run_id, image_hash, fbx_hash, settings, commit):
             raise ValueError(f"existing prepared run does not match its content identity: {run_dir}")
         print(f"Prepared run already exists: {run_dir}")
+        write_result(args.result_file, run_dir)
         return
     if run_dir.exists():
         raise FileExistsError(
@@ -168,6 +179,7 @@ def main() -> None:
         "--frames", str(args.frames),
         "--fps", str(args.fps),
         "--start", str(args.start),
+        "--timing", args.timing,
         "--framing", args.framing,
         "--margin", str(args.margin),
         "--ease-frames", str(args.ease_frames),
@@ -177,6 +189,7 @@ def main() -> None:
     )
 
     staging_dir.rename(run_dir)
+    write_result(args.result_file, run_dir)
     relative_run = run_dir.relative_to(COMFY_ROOT)
     print(
         "\nPrepared input ready:\n"

@@ -10,13 +10,37 @@ The original photograph is not wired directly to SCAIL-2. It is reprojected
 through the fitted camera so the reference and driver share one canvas and
 frame-zero geometry.
 
+## Greenfield workflow
+
+The bundled
+[`Jakkanna Image FBX Animate Greenfield.json`](../workflows/Jakkanna%20Image%20FBX%20Animate%20Greenfield.json)
+is the normal end-user entry point. Only three expanded controls are intended
+to be changed:
+
+1. upload or select one high-resolution single-subject image;
+2. select an FBX from `ComfyUI/input/animate`; and
+3. describe the finished animation.
+
+All preparation and generation nodes are collapsed and preconfigured. Queueing
+the workflow fits the subject, prepares or reuses a content-addressed driver,
+validates registration and animation continuity, and generates the review MP4,
+lossless master, reference, and production manifest.
+
+Describe any important clothing, footwear, or anatomy that is hidden or outside
+the photograph. Those details cannot be recovered from pixels that are not
+present.
+
 ## Supported contract
 
 - One clearly detectable human subject.
 - Binary FBX with the standard 20-bone Mixamo body mapping.
-- A clip spanning the requested 81-frame, 16 fps window.
+- At least 81 animation samples. Clips shorter than five seconds are
+  automatically time-fitted; longer clips retain original speed and use their
+  first five seconds.
 - 704 × 1280 or 1280 × 704 output.
-- Explicit `preserve` or `in_place` root-motion policy.
+- Automatic root-motion policy. Motion is preserved unless the required static
+  camera would make the person too small, in which case it is retargeted
+  in-place and recorded as such in the manifest.
 
 Other skeleton profiles, ASCII FBX, multiple people, non-human subjects, and
 severely occluded people are rejected or outside the supported contract.

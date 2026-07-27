@@ -17,6 +17,7 @@ REGISTERED_NODE_MAPPINGS = {
     "VNCCS_PoseStudio": "JakkannaPoseStudio",
     "JakkannaPromptFromList": "JakkannaPromptFromList",
     "JakkannaRealityScanImageSetSave": "JakkannaRealityScanImageSetSave",
+    "JakkannaImageFBXPrepare": "JakkannaImageFBXPrepare",
     "JakkannaSCAIL2FlowUniPC": "JakkannaSCAIL2FlowUniPC",
     "JakkannaSCAIL2ProductionInputValidate": "JakkannaSCAIL2ProductionInputValidate",
     "JakkannaSCAIL2ProductionManifest": "JakkannaSCAIL2ProductionManifest",

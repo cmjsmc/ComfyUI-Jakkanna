@@ -149,6 +149,7 @@ class PreparedTrackValidationTests(unittest.TestCase):
         report = {
             "schema": "jakkanna.image_fbx_animation.v1",
             "run_id": "test-run",
+            "registration": {"frame0_subject_iou_visible": 0.9},
             "settings": {"frames": 3, "fps": 16.0, "width": 24, "height": 24},
             "artifacts": {
                 "driver": {
@@ -211,6 +212,25 @@ class PreparedTrackValidationTests(unittest.TestCase):
         report["artifacts"]["driving_mask"]["rgb16_sha256"] = "0" * 64
 
         with self.assertRaisesRegex(ValueError, "do not match"):
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source,
+                driving_masks,
+                registered_reference,
+                reference_mask,
+                3,
+                json.dumps(report),
+                2.0,
+                0.15,
+                0.1,
+                0.01,
+            )
+
+    def test_rejects_poor_visible_subject_registration(self):
+        source, driving_masks, registered_reference, reference_mask, report_json = self._inputs()
+        report = json.loads(report_json)
+        report["registration"]["frame0_subject_iou_visible"] = 0.4
+
+        with self.assertRaisesRegex(ValueError, "visible-subject IoU"):
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source,
                 driving_masks,

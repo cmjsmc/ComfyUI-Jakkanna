@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=81)
     parser.add_argument("--fps", type=float, default=16.0)
     parser.add_argument("--start", type=float, default=0.0, help="clip start time, seconds")
+    parser.add_argument("--timing", choices=("original_speed", "auto", "fit_clip"), default="original_speed")
     parser.add_argument("--supersample", type=int, default=3)
     parser.add_argument("--bbox-threshold", type=float, default=0.8)
     parser.add_argument("--framing", choices=("full_body", "reference_crop"), default="full_body",
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ease-frames", type=int, default=12,
                         help="frames spent easing out of the photograph's pose into the clip; "
                              "0 starts on the clip's own pose")
-    parser.add_argument("--root-motion", choices=("preserve", "in_place"), default="preserve")
+    parser.add_argument("--root-motion", choices=("preserve", "in_place", "auto"), default="preserve")
     return parser.parse_args()
 
 
@@ -89,6 +90,16 @@ def source_input(path: Path) -> dict:
     except ValueError:
         relative = Path(resolved.name)
     return {"path": str(relative), "sha256": file_sha256(resolved)}
+
+
+def sampling_times(retargeter, frames: int, fps: float, start: float, timing: str):
+    requested_end = start + (frames - 1) / fps
+    duration = retargeter.clip.duration
+    if timing == "fit_clip" or (timing == "auto" and requested_end > duration + 1e-6):
+        if start >= duration:
+            raise ValueError(f"clip start {start:.3f}s is at or beyond the FBX duration {duration:.3f}s")
+        return np.linspace(start, duration, frames), "fit_clip"
+    return retargeter.sample_times(frames, fps, start), "original_speed"
 
 
 def reference_crop_camera(fit, width: int, height: int) -> tuple[float, tuple[float, float]]:
@@ -178,23 +189,50 @@ def main() -> None:
     print(f"[driver] clip '{args.fbx.name}' {clip.duration:.2f}s, "
           f"{args.frames} frames @ {args.fps} fps from {args.start:.2f}s, "
           f"ease {args.ease_frames} frames")
-    times = retargeter.sample_times(args.frames, args.fps, args.start)
+    times, resolved_timing = sampling_times(
+        retargeter,
+        args.frames,
+        args.fps,
+        args.start,
+        args.timing,
+    )
+    playback_speed_ratio = float((times[-1] - times[0]) / ((args.frames - 1) / args.fps))
+    print(
+        f"[driver] timing {resolved_timing}: source {times[0]:.3f}s–{times[-1]:.3f}s "
+        f"mapped to {(args.frames - 1) / args.fps:.3f}s"
+    )
+
+    def pose_frames(follow_root):
+        posed_frames = []
+        frame_rays = []
+        for index, time in enumerate(times):
+            params = retargeter.joint_params_at(
+                time, reference_time=args.start,
+                follow_root=follow_root,
+                blend=retargeter.ease(index, args.ease_frames),
+            )
+            verts = rig.vertices(params, fit)
+            posed_frames.append(verts)
+            cam = camera_space(verts, fit.cam_t)
+            frame_rays.append(cam[:, :2] / np.maximum(cam[:, 2:3], 1e-4))
+        return posed_frames, np.concatenate(frame_rays, axis=0)
 
     # Pose every frame first: the full-body camera has to see the whole clip
     # before it can choose a focal length that keeps the body inside the canvas.
-    posed = []
-    rays = []
-    for index, time in enumerate(times):
-        params = retargeter.joint_params_at(
-            time, reference_time=args.start,
-            follow_root=args.root_motion == "preserve",
-            blend=retargeter.ease(index, args.ease_frames),
-        )
-        verts = rig.vertices(params, fit)
-        posed.append(verts)
-        cam = camera_space(verts, fit.cam_t)
-        rays.append(cam[:, :2] / np.maximum(cam[:, 2:3], 1e-4))
-    rays = np.concatenate(rays, axis=0)
+    follow_root = args.root_motion != "in_place"
+    posed, rays = pose_frames(follow_root)
+    resolved_root_motion = "preserve" if follow_root else "in_place"
+    preserved_focal = None
+    if args.framing == "full_body" and args.root_motion == "auto":
+        preserved_focal, _ = fit_body_camera(rays, args.width, args.height, args.margin)
+        minimum_safe_focal = min(args.width, args.height) * 0.75
+        if not np.isfinite(preserved_focal) or preserved_focal < minimum_safe_focal:
+            posed, rays = pose_frames(False)
+            resolved_root_motion = "in_place"
+            print(
+                f"[driver] root motion changed to in-place: preserved motion requires "
+                f"focal={preserved_focal:.2f}, below the safe framing floor {minimum_safe_focal:.2f}"
+            )
 
     if args.framing == "full_body":
         focal, principal = fit_body_camera(rays, args.width, args.height, args.margin)
@@ -286,6 +324,7 @@ def main() -> None:
             "frames": args.frames,
             "fps": args.fps,
             "start_seconds": args.start,
+            "timing": args.timing,
             "width": args.width,
             "height": args.height,
             "framing": args.framing,
@@ -294,6 +333,11 @@ def main() -> None:
             "root_motion": args.root_motion,
             "supersample": args.supersample,
             "bbox_threshold": args.bbox_threshold,
+            "resolved_timing": resolved_timing,
+            "source_duration_seconds": clip.duration,
+            "sample_end_seconds": float(times[-1]),
+            "playback_speed_ratio": playback_speed_ratio,
+            "resolved_root_motion": resolved_root_motion,
         },
         "registration": {
             "render_focal": focal,
@@ -303,6 +347,7 @@ def main() -> None:
             "camera_translation": fit.cam_t.tolist(),
             "frame0_subject_iou": iou,
             "frame0_subject_iou_visible": iou_visible,
+            "preserved_root_motion_focal": preserved_focal,
         },
         "artifacts": {
             "fit": {

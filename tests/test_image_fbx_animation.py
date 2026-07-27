@@ -13,7 +13,9 @@ import numpy as np
 TOOLS = Path(__file__).resolve().parents[1] / "tools" / "scail2_animate"
 sys.path.insert(0, str(TOOLS))
 
+import audit_fbx
 import build_driver
+import make_greenfield_workflow
 import make_workflow
 import run_all
 import workflow_builder
@@ -63,6 +65,30 @@ class RunIdentityTests(unittest.TestCase):
         self.assertEqual(len(safe_name("a" * 100)), 64)
         with self.assertRaises(ValueError):
             safe_name(" !!! ")
+
+    def test_automatic_timing_only_fits_short_clips(self):
+        self.assertEqual(audit_fbx.automatic_timing(4.0), "fit_clip")
+        self.assertEqual(audit_fbx.automatic_timing(5.0), "original_speed")
+        self.assertEqual(audit_fbx.automatic_timing(15.0), "original_speed")
+
+    def test_sampling_times_uses_source_speed_or_fits_short_clip(self):
+        class FakeRetargeter:
+            def __init__(self, duration):
+                self.clip = type("Clip", (), {"duration": duration})()
+
+            def sample_times(self, frames, fps, start):
+                return start + np.arange(frames) / fps
+
+        long_times, long_policy = build_driver.sampling_times(
+            FakeRetargeter(15.0), 81, 16.0, 0.0, "auto"
+        )
+        short_times, short_policy = build_driver.sampling_times(
+            FakeRetargeter(2.0), 81, 16.0, 0.0, "auto"
+        )
+        self.assertEqual(long_policy, "original_speed")
+        self.assertEqual(long_times[-1], 5.0)
+        self.assertEqual(short_policy, "fit_clip")
+        self.assertEqual(short_times[-1], 2.0)
 
 
 class PreparedArtifactTests(unittest.TestCase):
@@ -160,6 +186,35 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertTrue(inputs[0]["widget"])
         self.assertFalse(inputs[1]["widget"])
         self.assertEqual(outputs, [{"name": "value", "type": "STRING"}])
+
+
+class GreenfieldWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.graph = make_greenfield_workflow.greenfield_workflow(
+            "ref_pic/luc.jpg",
+            "dance.fbx",
+            "preserve the subject",
+            42,
+        )
+
+    def test_exposes_only_image_fbx_and_prompt_as_intended_controls(self):
+        self.assertEqual(make_greenfield_workflow.VISIBLE, {"I1", "F1", "P1"})
+        self.assertEqual(self.graph["I1"], ("LoadImage", {"image": "ref_pic/luc.jpg"}))
+        self.assertEqual(self.graph["F1"][1]["fbx_file"], "dance.fbx")
+        self.assertEqual(self.graph["P1"][1]["value"], "preserve the subject")
+
+    def test_prepared_outputs_replace_all_run_directory_loaders(self):
+        node_types = {node_type for node_type, _inputs in self.graph.values()}
+        self.assertNotIn("VHS_LoadImages", node_types)
+        self.assertEqual(self.graph["V1"][1]["images"], ["F1", 0])
+        self.assertEqual(self.graph["V3"][1]["driving_mask_images"], ["F1", 1])
+        self.assertEqual(self.graph["V3"][1]["registered_reference"], ["F1", 2])
+        self.assertEqual(self.graph["V3"][1]["preprocess_report"], ["F1", 3])
+
+    def test_prepared_validation_remains_on_sampling_dependency_path(self):
+        self.assertEqual(self.graph["C1"][1]["length"], ["V3", 2])
+        self.assertEqual(self.graph["C1"][1]["pose_video"], ["F1", 0])
+        self.assertEqual(self.graph["C1"][1]["pose_video_mask"], ["F1", 1])
 
 
 if __name__ == "__main__":

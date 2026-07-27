@@ -68,6 +68,7 @@ def build(
     titles: dict,
     columns: dict,
     graph_id: str,
+    collapsed: set[str] | None = None,
 ) -> dict:
     info = object_info(server)
     specs = {
@@ -78,6 +79,7 @@ def build(
     rows = {}
     nodes_out = []
     links = []
+    collapsed = set() if collapsed is None else collapsed
 
     for order, (name, (node_type, values)) in enumerate(workflow.items()):
         column = columns[name]
@@ -95,7 +97,7 @@ def build(
             "type": node_type,
             "pos": [column * 380 + 20, row * 190 + 40],
             "size": [340, 150],
-            "flags": {},
+            "flags": {"collapsed": True} if name in collapsed else {},
             "order": order,
             "mode": 0,
             "inputs": [],

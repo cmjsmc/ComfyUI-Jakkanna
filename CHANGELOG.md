@@ -16,6 +16,9 @@
 *   Added content-addressed image/FBX preprocessing with SAM 3D Body
     registration, strict Mixamo retarget validation, prepared-mask continuity
     checks, and generated Fast SCAIL-2 UI/API workflows.
+*   Added a greenfield three-input image/FBX workflow with automatic short-clip
+    timing, subject-scale-aware root-motion framing, and registration quality
+    gates.
 
 # Version 1.2.0
 ## FBX Animation and SCAIL-2 Production Workflows
