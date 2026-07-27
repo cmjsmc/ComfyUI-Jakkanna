@@ -3146,12 +3146,16 @@ export class PoseViewerCore {
             }
         }
 
-        // Update skeleton after all changes
-        if (this.skeleton) {
-            this.skeleton.update();
-        }
+        this.settlePoseForCapture();
 
         this.requestRender();
+    }
+
+    settlePoseForCapture() {
+        if (this.scene) this.scene.updateMatrixWorld(true);
+        if (this.skinnedMesh) this.skinnedMesh.updateMatrixWorld(true);
+        if (this.skeleton) this.skeleton.update();
+        if (this.skinnedMesh) this.skinnedMesh.updateMatrixWorld(true);
     }
 
     setCameraParams(params) {
@@ -4186,6 +4190,7 @@ export class PoseViewerCore {
     capture(width, height, zoom, bgColor, offsetX = 0, offsetY = 0, yawDeg = 0, pitchDeg = 0) {
         if (!this.initialized) return null;
 
+        this.settlePoseForCapture();
         // Ensure camera is setup
         this.updateCaptureCamera(width, height, zoom, offsetX, offsetY, yawDeg, pitchDeg);
         this.lastOpenPoseKeypoints = this.exportOpenPoseKeypoints(width, height);

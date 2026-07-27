@@ -13,6 +13,7 @@ import base64
 import binascii
 import math
 import threading
+import uuid
 from io import BytesIO
 import hashlib
 import torch
@@ -30,6 +31,17 @@ _CAPTURED_IMAGE_MAX_TOTAL_CHARS = 64 * 1024 * 1024
 _CAPTURED_IMAGE_MAX_BYTES = 32 * 1024 * 1024
 _CAPTURED_IMAGE_MAX_PIXELS = 4096 * 4096
 _CAPTURED_IMAGE_MAX_TOTAL_PIXELS = 128 * 1024 * 1024
+_EXECUTION_STATE_FIELDS = (
+    "studio_id",
+    "mesh",
+    "export",
+    "poses",
+    "lights",
+    "activeTab",
+    "lighting_prompts",
+    "animation",
+    "background_url",
+)
 
 
 # === Data Cache and Loader (from Character Studio) ===
@@ -56,9 +68,50 @@ def _vector3(value, path):
         _finite_number(component, f"{path}[{index}]")
 
 
+def _execution_state(data):
+    return {name: data.get(name) for name in _EXECUTION_STATE_FIELDS}
+
+
+def _canonical_execution_value(value):
+    if value is None:
+        return "z"
+    if isinstance(value, bool):
+        return "b1" if value else "b0"
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if number == 0:
+            return "n0e0"
+        mantissa, exponent = format(number, ".16e").split("e")
+        return f"n{mantissa}e{int(exponent)}"
+    if isinstance(value, str):
+        return f"s{json.dumps(value, ensure_ascii=False, separators=(',', ':'))}"
+    if isinstance(value, list):
+        return "a[" + ",".join(_canonical_execution_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "o{" + ",".join(
+            f"{json.dumps(key, ensure_ascii=False)}:{_canonical_execution_value(value[key])}"
+            for key in sorted(value)
+        ) + "}"
+    raise ValueError(f"Unsupported execution-state value: {type(value).__name__}")
+
+
+def _execution_state_json(data):
+    return _canonical_execution_value(_execution_state(data))
+
+
+def _execution_state_signature(data):
+    return hashlib.sha256(_execution_state_json(data).encode("utf-8")).hexdigest()
+
+
 def _validate_pose_data(data):
     if not isinstance(data, dict):
         raise ValueError("pose_data must be a JSON object")
+    studio_id = data.get("studio_id")
+    if studio_id is not None:
+        if not isinstance(studio_id, str) or not 1 <= len(studio_id) <= 128:
+            raise ValueError("studio_id must be a nonempty string no longer than 128 characters")
+        if any(not (character.isalnum() or character in "_-") for character in studio_id):
+            raise ValueError("studio_id may contain only letters, numbers, underscores, and hyphens")
 
     mesh = data.get("mesh", {})
     if not isinstance(mesh, dict):
@@ -285,6 +338,24 @@ def _decode_captured_images(captured_images):
     return rendered_images
 
 
+def _validate_duplicate_pose_captures(data, rendered_images):
+    if data.get("export", {}).get("debugMode", False):
+        return
+    first_by_pose = {}
+    for index, (pose, image) in enumerate(zip(data.get("poses", []), rendered_images)):
+        pose_token = _canonical_execution_value(pose)
+        previous = first_by_pose.get(pose_token)
+        if previous is None:
+            first_by_pose[pose_token] = (index, np.asarray(image))
+            continue
+        previous_index, previous_image = previous
+        if not np.array_equal(previous_image, np.asarray(image)):
+            raise ValueError(
+                f"Pose Studio rendered identical pose states differently on frames "
+                f"{previous_index} and {index}; reload the viewer and capture again"
+            )
+
+
 def _get_character_data_path():
     """Get the path to CharacterData folder."""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "CharacterData"))
@@ -350,9 +421,9 @@ def _ensure_data_loaded():
 class JakkannaPoseStudio:
     """Pose Studio with mesh editing and multiple pose generation."""
     
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("images", "lighting_prompt")
-    OUTPUT_IS_LIST = (True, True)
+    RETURN_TYPES = ("IMAGE", "STRING", "IMAGE")
+    RETURN_NAMES = ("images", "lighting_prompt", "image_batch")
+    OUTPUT_IS_LIST = (True, True, False)
     FUNCTION = "generate"
     CATEGORY = "Jakkanna/pose"
     
@@ -393,24 +464,29 @@ class JakkannaPoseStudio:
         except Exception:
             return f"{pose_data}|pose_image:{id(pose_image)}"
 
-    def _discard_frontend_sync(self, unique_id):
+    def _sync_path(self, unique_id, request_id):
         import folder_paths
 
-        filepath = os.path.join(folder_paths.get_temp_directory(), f"jakkanna_debug_{unique_id}.json")
+        return os.path.join(
+            folder_paths.get_temp_directory(),
+            f"jakkanna_sync_{unique_id}_{request_id}.json",
+        )
+
+    def _discard_frontend_sync(self, unique_id, request_id):
+        filepath = self._sync_path(unique_id, request_id)
         try:
             os.remove(filepath)
         except FileNotFoundError:
             pass
 
-    def _wait_for_frontend_sync(self, unique_id, start_time, timeout=15.0):
+    def _wait_for_frontend_sync(self, unique_id, request_id, timeout=30.0):
         import time
-        import folder_paths
 
-        temp_dir = folder_paths.get_temp_directory()
-        filepath = os.path.join(temp_dir, f"jakkanna_debug_{unique_id}.json")
+        filepath = self._sync_path(unique_id, request_id)
+        start_time = time.time()
 
         while time.time() - start_time < timeout:
-            if os.path.exists(filepath) and os.path.getmtime(filepath) >= start_time:
+            if os.path.exists(filepath):
                 try:
                     with open(filepath, "r", encoding="utf-8") as f:
                         sync_data = json.load(f)
@@ -444,16 +520,27 @@ class JakkannaPoseStudio:
             if not isinstance(pose_payload, dict) or not pose_payload:
                 raise RuntimeError("pose_image SAM import returned empty pose data")
 
-            self._discard_frontend_sync(unique_id)
-            start_time = time.time()
+            request_id = uuid.uuid4().hex
+            self._discard_frontend_sync(unique_id, request_id)
             PromptServer.instance.send_sync("vnccs_apply_sam3d_pose", {
                 "node_id": unique_id,
+                "request_id": request_id,
                 "pose_data": pose_payload,
             })
-            synced = self._wait_for_frontend_sync(unique_id, start_time, timeout=30.0)
+            synced = self._wait_for_frontend_sync(unique_id, request_id)
             if synced:
+                if synced.get("request_id") != request_id:
+                    raise RuntimeError("Pose Studio frontend returned a mismatched synchronization request")
+                synced_pose_data = synced.get("pose_data")
+                if not isinstance(synced_pose_data, str):
+                    raise RuntimeError("Pose Studio frontend did not return synchronized pose_data")
+                synced_data = json.loads(synced_pose_data)
+                if synced.get("state_signature") != _execution_state_signature(synced_data):
+                    raise RuntimeError("Pose Studio frontend returned pose data with an invalid state signature")
+                synced_data["captured_images"] = synced.get("captured_images", [])
+                synced_data["openpose_keypoints"] = synced.get("openpose_keypoints", [])
                 print("[Jakkanna Pose Studio] Applied pose_image SAM pose through frontend sync.")
-                return synced
+                return synced_data
             raise RuntimeError(
                 "pose_image was analyzed, but the Pose Studio frontend did not return synchronized captures"
             )
@@ -468,6 +555,7 @@ class JakkannaPoseStudio:
         except (json.JSONDecodeError, TypeError) as exc:
             raise ValueError("pose_data must contain valid JSON") from exc
         _validate_pose_data(data)
+        state_signature = _execution_state_signature(data)
 
         if pose_image is not None:
             if data.get("export", {}).get("interface_mode") == "manager":
@@ -476,35 +564,46 @@ class JakkannaPoseStudio:
             if not isinstance(data, dict):
                 raise RuntimeError("pose_image did not return synchronized Pose Studio data")
             _validate_pose_data(data)
+            state_signature = _execution_state_signature(data)
         elif unique_id and not _captures_complete(data):
             synced = None
             try:
                 from server import PromptServer
-                import time
 
-                self._discard_frontend_sync(unique_id)
-                start_time = time.time()
-                PromptServer.instance.send_sync("vnccs_req_pose_sync", {"node_id": unique_id})
-                synced = self._wait_for_frontend_sync(unique_id, start_time, timeout=30.0)
+                request_id = uuid.uuid4().hex
+                self._discard_frontend_sync(unique_id, request_id)
+                PromptServer.instance.send_sync("vnccs_req_pose_sync", {
+                    "node_id": unique_id,
+                    "request_id": request_id,
+                    "studio_id": data.get("studio_id"),
+                    "state_signature": state_signature,
+                    "execution_state": _execution_state(data),
+                })
+                synced = self._wait_for_frontend_sync(unique_id, request_id)
             except Exception as exc:
                 print(f"[Jakkanna Pose Studio] Frontend sync failed: {exc}")
             if synced is not None:
-                _validate_pose_data(synced)
-                data = synced
+                if synced.get("request_id") != request_id:
+                    raise RuntimeError("Pose Studio frontend returned a mismatched synchronization request")
+                if synced.get("state_signature") != state_signature:
+                    raise RuntimeError("Pose Studio frontend captures do not match the queued execution state")
+                data["captured_images"] = synced.get("captured_images", [])
+                data["openpose_keypoints"] = synced.get("openpose_keypoints", [])
 
         if not _captures_complete(data):
-            capture_id = data.get("capture_id")
-            if capture_id:
-                try:
-                    from .. import _jakkanna_get_capture_cache
+            try:
+                from .. import _jakkanna_get_capture_cache
 
-                    cached = _jakkanna_get_capture_cache(capture_id, data.get("capture_version", 0))
-                    if cached:
-                        data["captured_images"] = cached.get("captured_images", [])
-                        data["lighting_prompts"] = cached.get("lighting_prompts", [])
-                        print(f"[Jakkanna Pose Studio] Loaded {len(data['captured_images'])} captures from LRU cache (id={capture_id})")
-                except (ImportError, AttributeError) as exc:
-                    print(f"[Jakkanna Pose Studio] Capture cache unavailable: {exc}")
+                cached = _jakkanna_get_capture_cache(state_signature)
+                if cached:
+                    data["captured_images"] = cached.get("captured_images", [])
+                    data["openpose_keypoints"] = cached.get("openpose_keypoints", [])
+                    print(
+                        f"[Jakkanna Pose Studio] Loaded {len(data['captured_images'])} captures "
+                        f"from the state-bound cache ({state_signature[:12]})"
+                    )
+            except (ImportError, AttributeError) as exc:
+                print(f"[Jakkanna Pose Studio] Capture cache unavailable: {exc}")
 
         _validate_pose_data(data)
         if not _captures_complete(data):
@@ -533,6 +632,12 @@ class JakkannaPoseStudio:
             for index in range(pose_count)
         ]
         rendered_images = _decode_captured_images(captured_images[:pose_count])
+        if len(rendered_images) != pose_count:
+            raise ValueError(f"Pose Studio decoded {len(rendered_images)} captures for {pose_count} poses")
+        first_size = rendered_images[0].size
+        if any(image.size != first_size for image in rendered_images[1:]):
+            raise ValueError("Pose Studio captures must all have identical dimensions")
+        _validate_duplicate_pose_captures(data, rendered_images)
         tensors = [
             torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0)
             for image in rendered_images
@@ -553,7 +658,8 @@ class JakkannaPoseStudio:
     ):
         """Generate rendered mesh images for all poses."""
         data = self._resolve_execution_data(pose_data, pose_image, unique_id)
-        return self._generate_from_execution_data(data)
+        images, prompts = self._generate_from_execution_data(data)
+        return images, prompts, torch.cat(images, dim=0)
 
     def _make_grid(self, images, columns, bg_color=(40, 40, 40)):
         """Combine images into a grid."""
