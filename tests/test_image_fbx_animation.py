@@ -19,7 +19,7 @@ import make_greenfield_workflow
 import make_workflow
 import run_all
 import workflow_builder
-from _env import safe_name
+from _env import package_version, release_identity, safe_name
 
 
 class RunIdentityTests(unittest.TestCase):
@@ -45,20 +45,38 @@ class RunIdentityTests(unittest.TestCase):
                 "fbx": {"sha256": "fbx"},
             },
             "settings": settings,
-            "software": {"jakkanna_commit": "commit"},
+            "software": {"jakkanna_release_identity": "1.3.0+commit"},
         }
         self.assertTrue(
             run_all.existing_run_matches(
-                manifest, "person-dance-abc", "image", "fbx", settings, "commit"
+                manifest, "person-dance-abc", "image", "fbx", settings, "1.3.0+commit"
             )
         )
         changed = json.loads(json.dumps(manifest))
         changed["inputs"]["fbx"]["sha256"] = "other"
         self.assertFalse(
             run_all.existing_run_matches(
-                changed, "person-dance-abc", "image", "fbx", settings, "commit"
+                changed, "person-dance-abc", "image", "fbx", settings, "1.3.0+commit"
             )
         )
+        changed = json.loads(json.dumps(manifest))
+        changed["software"]["jakkanna_release_identity"] = "1.3.1+other"
+        self.assertFalse(
+            run_all.existing_run_matches(
+                changed, "person-dance-abc", "image", "fbx", settings, "1.3.0+commit"
+            )
+        )
+
+    def test_registry_archive_identity_uses_version_without_git(self):
+        failed = type("Result", (), {"returncode": 128, "stdout": ""})()
+        with mock.patch("_env.subprocess.run", return_value=failed):
+            self.assertEqual(release_identity(), package_version())
+
+    def test_source_checkout_identity_includes_version_and_commit(self):
+        commit = "a" * 40
+        successful = type("Result", (), {"returncode": 0, "stdout": f"{commit}\n"})()
+        with mock.patch("_env.subprocess.run", return_value=successful):
+            self.assertEqual(release_identity(), f"{package_version()}+{commit}")
 
     def test_safe_run_name_is_bounded_and_filesystem_safe(self):
         self.assertEqual(safe_name(" Luc & DANCE.fbx "), "luc-dance-fbx")

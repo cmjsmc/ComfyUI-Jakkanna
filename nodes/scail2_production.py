@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 import cv2
@@ -120,6 +121,16 @@ def _git_commit(root):
     except OSError:
         pass
     return "unknown"
+
+
+def _package_version(root):
+    match = re.search(
+        r'(?m)^version\s*=\s*"([^"]+)"',
+        (Path(root) / "pyproject.toml").read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise ValueError("Jakkanna package version is missing from pyproject.toml")
+    return match.group(1)
 
 
 def _attention_backend():
@@ -1115,12 +1126,14 @@ class JakkannaSCAIL2ProductionManifest:
             prepared_mask_hash = prepared_input.get("artifacts", {}).get("driving_mask", {}).get("rgb16_sha256")
             if prepared_mask_hash != pose_video_mask_hash:
                 raise ValueError("Raw driving mask does not match the preprocessing report")
+        jakkanna_root = Path(__file__).resolve().parents[1]
         manifest = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "pipeline": f"SCAIL-2 single-subject 81-frame character {mode}",
             "upstream_scail2_commit": UPSTREAM_COMMIT,
             "comfyui_commit": _git_commit(Path(folder_paths.__file__).resolve().parent),
-            "jakkanna_commit": _git_commit(Path(__file__).resolve().parents[1]),
+            "jakkanna_version": _package_version(jakkanna_root),
+            "jakkanna_commit": _git_commit(jakkanna_root),
             "torch_version": torch.__version__,
             "cuda_version": torch.version.cuda,
             "attention_backend": actual_attention_backend,

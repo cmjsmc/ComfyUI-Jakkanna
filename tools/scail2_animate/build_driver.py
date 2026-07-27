@@ -19,7 +19,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from _env import COMFY_ROOT, bootstrap, file_sha256, repository_commit
+from _env import COMFY_ROOT, bootstrap, file_sha256, package_version, release_identity, repository_commit
 
 bootstrap()
 
@@ -61,6 +61,8 @@ def parse_args() -> argparse.Namespace:
                         help="frames spent easing out of the photograph's pose into the clip; "
                              "0 starts on the clip's own pose")
     parser.add_argument("--root-motion", choices=("preserve", "in_place", "auto"), default="preserve")
+    parser.add_argument("--jakkanna-version")
+    parser.add_argument("--jakkanna-release-identity")
     return parser.parse_args()
 
 
@@ -152,6 +154,8 @@ def reproject_reference(photo: np.ndarray, fit, focal: float,
 
 def main() -> None:
     args = parse_args()
+    version = args.jakkanna_version or package_version()
+    identity = args.jakkanna_release_identity or release_identity()
     run_id = args.run_id or args.run_dir.name
     if not args.image.is_file():
         raise FileNotFoundError(f"reference image does not exist: {args.image}")
@@ -368,7 +372,9 @@ def main() -> None:
             "registered_reference": artifact(reference_path, args.run_dir),
         },
         "software": {
+            "jakkanna_version": version,
             "jakkanna_commit": repository_commit(),
+            "jakkanna_release_identity": identity,
         },
     }
     manifest_path = args.run_dir / "preprocess_manifest.json"

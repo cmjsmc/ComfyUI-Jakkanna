@@ -12,7 +12,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _env import COMFY_ROOT, INPUT_ROOT, RUN_ROOT, file_sha256, repository_commit, safe_name
+from _env import (
+    COMFY_ROOT,
+    INPUT_ROOT,
+    RUN_ROOT,
+    file_sha256,
+    package_version,
+    release_identity,
+    safe_name,
+)
 
 
 HERE = Path(__file__).resolve().parent
@@ -67,7 +75,7 @@ def existing_run_matches(
     image_hash: str,
     fbx_hash: str,
     settings: dict,
-    commit: str,
+    identity: str,
 ) -> bool:
     return (
         manifest.get("schema") == "jakkanna.image_fbx_animation.v1"
@@ -75,7 +83,7 @@ def existing_run_matches(
         and manifest.get("inputs", {}).get("image", {}).get("sha256") == image_hash
         and manifest.get("inputs", {}).get("fbx", {}).get("sha256") == fbx_hash
         and all(manifest.get("settings", {}).get(name) == value for name, value in settings.items())
-        and manifest.get("software", {}).get("jakkanna_commit") == commit
+        and manifest.get("software", {}).get("jakkanna_release_identity") == identity
     )
 
 
@@ -100,7 +108,8 @@ def main() -> None:
 
     image_hash = file_sha256(image)
     fbx_hash = file_sha256(fbx)
-    commit = repository_commit()
+    version = package_version()
+    identity = release_identity()
     settings = {
         "frames": args.frames,
         "fps": args.fps,
@@ -115,14 +124,14 @@ def main() -> None:
         "supersample": args.supersample,
         "bbox_threshold": args.bbox_threshold,
     }
-    digest = run_identity(image_hash, fbx_hash, settings, commit)
+    digest = run_identity(image_hash, fbx_hash, settings, identity)
     prefix = safe_name(args.name or f"{image.stem}-{fbx.stem}")
     run_id = f"{prefix}-{digest[:12]}"
     run_dir = output_root / run_id
     manifest_path = run_dir / "preprocess_manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text())
-        if not existing_run_matches(manifest, run_id, image_hash, fbx_hash, settings, commit):
+        if not existing_run_matches(manifest, run_id, image_hash, fbx_hash, settings, identity):
             raise ValueError(f"existing prepared run does not match its content identity: {run_dir}")
         print(f"Prepared run already exists: {run_dir}")
         write_result(args.result_file, run_dir)
@@ -186,6 +195,8 @@ def main() -> None:
         "--root-motion", args.root_motion,
         "--supersample", str(args.supersample),
         "--bbox-threshold", str(args.bbox_threshold),
+        "--jakkanna-version", version,
+        "--jakkanna-release-identity", identity,
     )
 
     staging_dir.rename(run_dir)

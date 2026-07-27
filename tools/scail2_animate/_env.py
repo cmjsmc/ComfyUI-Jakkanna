@@ -37,6 +37,25 @@ def repository_commit() -> str:
     return commit if result.returncode == 0 and len(commit) == 40 else "unknown"
 
 
+def package_version() -> str:
+    match = re.search(
+        r'(?m)^version\s*=\s*"([^"]+)"',
+        (JAKKANNA_DIR / "pyproject.toml").read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise ValueError("Jakkanna package version is missing from pyproject.toml")
+    version = match.group(1)
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?", version):
+        raise ValueError(f"invalid Jakkanna package version: {version!r}")
+    return version
+
+
+def release_identity() -> str:
+    version = package_version()
+    commit = repository_commit()
+    return f"{version}+{commit}" if commit != "unknown" else version
+
+
 def safe_name(value: str) -> str:
     name = _SAFE_NAME.sub("-", value).strip("-_").lower()
     if not name:
