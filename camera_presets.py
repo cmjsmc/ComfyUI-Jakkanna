@@ -61,3 +61,8 @@ def camera_preset_spec(name):
         raise ValueError(
             f"Unsupported camera preset {name!r}; choose one of: {', '.join(CAMERA_PRESETS)}"
         ) from error
+
+
+def resolve_camera_margin(name, requested_margin):
+    margin = camera_preset_spec(name)["margin"]
+    return requested_margin if margin is None else margin

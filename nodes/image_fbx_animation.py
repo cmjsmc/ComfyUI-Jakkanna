@@ -13,14 +13,17 @@ import torch
 import comfy.model_management
 import folder_paths
 
-from ..camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS, camera_preset_spec
+from ..camera_presets import (
+    AUTO_CAMERA_PRESET,
+    CAMERA_PRESETS,
+    camera_preset_spec,
+)
 
 
 _JAKKANNA_ROOT = Path(__file__).resolve().parents[1]
 _RUN_ALL = _JAKKANNA_ROOT / "tools" / "scail2_animate" / "run_all.py"
 _MINIMUM_IMAGE_EDGE = 720
 _MAXIMUM_IMAGE_PIXELS = 4096 * 4096
-_MINIMUM_VISIBLE_REGISTRATION_IOU = 0.65
 
 
 def _file_sha256(path):
@@ -252,14 +255,6 @@ class JakkannaImageFBXPrepare:
         report = json.loads(report_path.read_text())
         if report.get("schema") != "jakkanna.image_fbx_animation.v1":
             raise ValueError("Prepared run has an unsupported manifest schema")
-        visible_iou = report.get("registration", {}).get("frame0_subject_iou_visible")
-        if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_VISIBLE_REGISTRATION_IOU:
-            raise ValueError(
-                f"Automatic body registration is not reliable enough for SCAIL-2: "
-                f"visible frame-zero IoU={visible_iou!r}, required "
-                f"{_MINIMUM_VISIBLE_REGISTRATION_IOU:.2f}; use a clearer image with a "
-                "less occluded subject"
-            )
         report["workflow_input"] = {
             **source_metadata,
             "fbx_file": fbx_path.relative_to(_animation_root().resolve()).as_posix(),

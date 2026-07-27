@@ -47,6 +47,16 @@ class CameraPresetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported camera preset"):
             camera_presets.camera_preset_spec("Bird's-eye View")
 
+    def test_camera_margin_resolves_before_cache_identity(self):
+        self.assertEqual(
+            camera_presets.resolve_camera_margin("Auto Director", 0.06),
+            0.06,
+        )
+        self.assertEqual(
+            camera_presets.resolve_camera_margin("American / Cowboy Shot", 0.06),
+            0.08,
+        )
+
     def test_shot_rays_selects_the_upper_region_per_frame(self):
         frames = [
             np.array([[-2.0, -4.0], [0.0, -4.0], [2.0, -4.0],

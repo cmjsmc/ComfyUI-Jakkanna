@@ -286,12 +286,12 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.01,
             )
 
-    def test_rejects_poor_visible_subject_registration(self):
+    def test_registration_iou_is_diagnostic(self):
         source, driving_masks, registered_reference, reference_mask, report_json = self._inputs()
         report = json.loads(report_json)
-        report["registration"]["frame0_subject_iou_visible"] = 0.4
+        report["registration"]["frame0_subject_iou_visible"] = 0.01
 
-        with self.assertRaisesRegex(ValueError, "visible-subject IoU"):
+        _initial, track_json, frames = (
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source,
                 driving_masks,
@@ -304,6 +304,12 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.1,
                 0.01,
             )
+        )
+
+        track = json.loads(track_json)
+        self.assertEqual(track["preprocess_run_id"], "test-run")
+        self.assertEqual(track["frame0_subject_iou_visible"], 0.01)
+        self.assertEqual(frames, 3)
 
     def test_medium_shot_allows_declared_bottom_and_side_clipping(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()

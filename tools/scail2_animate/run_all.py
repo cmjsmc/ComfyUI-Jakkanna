@@ -25,7 +25,11 @@ from _env import (
 
 bootstrap()
 
-from jakkanna_pack.camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS
+from jakkanna_pack.camera_presets import (
+    AUTO_CAMERA_PRESET,
+    CAMERA_PRESETS,
+    resolve_camera_margin,
+)
 
 
 HERE = Path(__file__).resolve().parent
@@ -122,6 +126,7 @@ def main() -> None:
     fbx_hash = file_sha256(fbx)
     version = package_version()
     identity = release_identity()
+    camera_margin = resolve_camera_margin(args.camera_preset, args.margin)
     settings = {
         "frames": args.frames,
         "fps": args.fps,
@@ -131,7 +136,7 @@ def main() -> None:
         "height": args.height,
         "framing": args.framing,
         "camera_preset": args.camera_preset,
-        "margin": args.margin,
+        "margin": camera_margin,
         "ease_frames": args.ease_frames,
         "root_motion": args.root_motion,
         "supersample": args.supersample,
@@ -204,7 +209,7 @@ def main() -> None:
         "--timing", args.timing,
         "--framing", args.framing,
         "--camera-preset", args.camera_preset,
-        "--margin", str(args.margin),
+        "--margin", str(camera_margin),
         "--ease-frames", str(args.ease_frames),
         "--root-motion", args.root_motion,
         "--supersample", str(args.supersample),
