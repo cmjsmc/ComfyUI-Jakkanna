@@ -1,3 +1,28 @@
+# Version 1.5.0
+## Gates That Run Before the Work
+
+*   Reinstated the frame-zero registration floor as a tunable
+    `minimum_registration_iou`, calibrated at 0.35 against every prepared run
+    on disk, so a body fit at the wrong depth, scale, or orientation stops the
+    run instead of driving a full 81-frame generation.
+*   Added `Jakkanna SCAIL-2 Validate Sampler`, which reconciles the sigma
+    schedule, sampler, scheduler, CFG, generation mode, and LoRA strengths
+    against the production manifest before sampling rather than after decode.
+*   Reported the timing and root-motion policies preparation resolves on its
+    own in the track report, and removed a preset-substitution check that
+    compared a value against itself.
+*   Collapsed the image/FBX workflows to one four-input Greenfield graph: the
+    camera preset is a node widget, so the sibling file's executable graph was
+    identical to it.
+*   Validated the prepared 81-frame batch directly instead of routing it
+    through a video round trip, and hashed the driver and driving mask once
+    each instead of three and two times.
+*   Kept the model-weight hash cache outside ComfyUI's temp directory so it
+    survives a restart, and made image/FBX preparation report progress,
+    honour a cancelled queue, and terminate its child process.
+*   Added `tools/scail2_animate/prune_runs.py` to retire superseded prepared
+    runs, keeping the most recent one per combination of inputs and settings.
+
 # Version 1.4.1
 ## Reliable Automatic Body Registration
 

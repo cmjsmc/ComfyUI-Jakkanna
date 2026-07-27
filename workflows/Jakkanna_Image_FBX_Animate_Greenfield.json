@@ -161,7 +161,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -240,7 +240,7 @@
       "properties": {
         "Node name for S&R": "JakkannaImageFBXPrepare",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -528,7 +528,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -828,7 +828,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ReferencePNG16Save",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -947,7 +947,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2PreparedTrackValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1676,7 +1676,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2UpstreamNoise",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1790,7 +1790,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SamplerValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [],
@@ -2124,7 +2124,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionManifest",
         "cnr_id": "jakkanna",
-        "ver": "1.4.1",
+        "ver": "1.5.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
