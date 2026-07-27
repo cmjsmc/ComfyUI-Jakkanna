@@ -155,6 +155,14 @@ class IdentityBoundaryTests(unittest.TestCase):
 
         self.assertGreater(found, 0)
 
+    def test_greenfield_workflow_uses_canonical_release_name(self):
+        workflow_dir = os.path.join(ROOT, "workflows")
+        canonical = "Jakkanna_Image_FBX_Animate_Greenfield.json"
+        self.assertTrue(os.path.isfile(os.path.join(workflow_dir, canonical)))
+        self.assertFalse(
+            os.path.exists(os.path.join(workflow_dir, "Jakkanna Image FBX Animate Greenfield.json"))
+        )
+
     def test_scail2_animation_workflows_are_self_contained(self):
         filenames = (
             "Jakkanna Krea 2 SCAIL 2 Animate Fast.json",
@@ -244,11 +252,15 @@ class IdentityBoundaryTests(unittest.TestCase):
 
     def test_scail2_release_dependencies_are_declared(self):
         with open(os.path.join(ROOT, "pyproject.toml"), "rb") as handle:
-            dependencies = tomllib.load(handle)["project"]["dependencies"]
+            metadata = tomllib.load(handle)
+        dependencies = metadata["project"]["dependencies"]
 
         self.assertIn("av>=16.0.0", dependencies)
         self.assertIn("diffusers>=0.31.0,<0.40", dependencies)
         self.assertIn("trimesh", dependencies)
+        self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
+        self.assertIn("Environment :: GPU :: NVIDIA CUDA", metadata["project"]["classifiers"])
+        self.assertEqual(metadata["tool"]["comfy"]["requires-comfyui"], ">=0.27.0")
 
         with open(os.path.join(ROOT, "requirements.txt"), "r", encoding="utf-8") as handle:
             requirements = [line.strip() for line in handle if line.strip() and not line.startswith("#")]

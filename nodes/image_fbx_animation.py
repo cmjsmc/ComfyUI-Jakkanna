@@ -190,6 +190,10 @@ class JakkannaImageFBXPrepare:
             return float("nan")
 
     def prepare(self, image, fbx_file):
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "Jakkanna image + FBX preparation requires an NVIDIA CUDA GPU"
+            )
         source_path, source_metadata = _write_source_image(image)
         fbx_path = _resolve_fbx(fbx_file)
         run_name = f"greenfield-{source_metadata['normalized_rgb8_sha256'][:12]}-{fbx_path.stem}"

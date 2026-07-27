@@ -26,6 +26,9 @@ Only three inputs are intended to be changed:
 3. **Customization prompt** — describe the finished video, especially the scene
    and any clothing or footwear that is hidden or outside the reference frame.
 
+Requires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model files listed in
+`docs/IMAGE_FBX_ANIMATION.md`, and ComfyUI-VideoHelperSuite 1.7.9 or newer.
+
 Queue the workflow after selecting those inputs. The collapsed nodes are the
 automatic preparation, validation, SCAIL-2 generation, and provenance pipeline;
 they do not need adjustment.

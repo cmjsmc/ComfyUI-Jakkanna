@@ -1,8 +1,9 @@
 [project]
 name = "jakkanna"
-description = "Visual control and creative tools for ComfyUI: 3D posing, OpenPose, canvas editing, detailing, and model workflows."
+description = "Visual control and creative tools for ComfyUI: 3D posing, image-and-FBX animation, OpenPose, canvas editing, and model workflows."
 version = "1.3.0"
 license = {file = "THIRD_PARTY_NOTICES.md"}
+requires-python = ">=3.10"
 
 dependencies = [
     "opencv-python",
@@ -31,6 +32,7 @@ dependencies = [
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
+    "Environment :: GPU :: NVIDIA CUDA",
 ]
 keywords = ["comfyui", "image-processing", "3d", "pose-estimation"]
 
@@ -43,6 +45,7 @@ Documentation = "https://github.com/teenu/ComfyUI-Jakkanna"
 [tool.comfy]
 PublisherId = "teenu"
 DisplayName = "Jakkanna"
+requires-comfyui = ">=0.27.0"
 NodeIds = [
     "VNCCS_PositionControl",
     "VNCCS_VisualPositionControl",

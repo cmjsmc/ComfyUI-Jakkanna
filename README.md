@@ -168,12 +168,15 @@ separate hardened SCAIL-2 workflow. This is intentionally a distinct product
 path: wiring an arbitrary photograph directly into the Krea workflow would
 discard the reference/driver registration that makes the animation reliable.
 The bundled
-[Greenfield Image + FBX workflow](workflows/Jakkanna%20Image%20FBX%20Animate%20Greenfield.json)
+[Greenfield Image + FBX workflow](workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
 reduces this path to three intended controls: reference image, FBX selection,
 and customization prompt. Its preparation, retargeting, framing, validation,
 sampling, and manifests run automatically. The current animation-directory
 compatibility results are recorded in
 [the FBX input audit](docs/FBX_INPUT_AUDIT.md).
+This workflow requires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model
+files listed in the image/FBX guide, and ComfyUI-VideoHelperSuite 1.7.9 or
+newer.
 
 ### Posed Mesh Export
 

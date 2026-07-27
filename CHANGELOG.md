@@ -19,6 +19,10 @@
 *   Added a greenfield three-input image/FBX workflow with automatic short-clip
     timing, subject-scale-aware root-motion framing, and registration quality
     gates.
+*   Made preprocessing cache identity safe for Registry ZIP installations by
+    keying it to the immutable package version when Git metadata is unavailable.
+*   Declared the minimum ComfyUI, Python, CUDA, model, and VideoHelperSuite
+    requirements for the greenfield workflow.
 
 # Version 1.2.0
 ## FBX Animation and SCAIL-2 Production Workflows

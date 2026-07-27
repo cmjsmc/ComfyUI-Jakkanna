@@ -13,7 +13,7 @@ frame-zero geometry.
 ## Greenfield workflow
 
 The bundled
-[`Jakkanna Image FBX Animate Greenfield.json`](../workflows/Jakkanna%20Image%20FBX%20Animate%20Greenfield.json)
+[`Jakkanna_Image_FBX_Animate_Greenfield.json`](../workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
 is the normal end-user entry point. Only three expanded controls are intended
 to be changed:
 
@@ -29,6 +29,43 @@ lossless master, reference, and production manifest.
 Describe any important clothing, footwear, or anatomy that is hidden or outside
 the photograph. Those details cannot be recovered from pixels that are not
 present.
+
+## Installation requirements
+
+- ComfyUI 0.27.0 or newer.
+- Python 3.10 or newer.
+- An NVIDIA CUDA GPU. The complete workflow was validated on a 32 GiB RTX 5090
+  and used about 27 GiB of VRAM. Lower-VRAM configurations have not been
+  validated.
+- ComfyUI-VideoHelperSuite 1.7.9 or newer for the review MP4 and lossless FFV1
+  master.
+- Approximately 30 GB for the seven SCAIL-2 generation files below, plus about
+  3 GB for SAM 3D Body and BiRefNet.
+
+Place the generation files at these exact paths:
+
+| ComfyUI path | Source |
+| --- | --- |
+| `models/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors` | [Comfy-Org/SCAIL-2](https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/diffusion_models/wan2.1_14B_SCAIL_2_fp8_scaled.safetensors) |
+| `models/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors` | [Comfy-Org/SCAIL-2](https://huggingface.co/Comfy-Org/SCAIL-2/resolve/main/loras/wan2.1_SCAIL_2_DPO_lora_bf16.safetensors) |
+| `models/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors` | [Kijai/WanVideo_comfy](https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors) |
+| `models/checkpoints/sam3.1_multiplex_fp16.safetensors` | [Comfy-Org/sam3.1](https://huggingface.co/Comfy-Org/sam3.1/resolve/main/checkpoints/sam3.1_multiplex_fp16.safetensors) |
+| `models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors` | [Comfy-Org/Wan 2.1](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors) |
+| `models/clip_vision/clip_vision_h.safetensors` | [Comfy-Org/Wan 2.1](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors) |
+| `models/vae/wan_2.1_vae.safetensors` | [Comfy-Org/Wan 2.1](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors) |
+
+The first preparation run downloads two auxiliary snapshots when they are not
+already installed:
+
+- `jetjodh/sam-3d-body-dinov3` to `models/sam3dbody`;
+- `ZhengPeng7/BiRefNet_lite` to `models/birefnet/BiRefNet_lite`.
+
+This first-run network access is initiated only when the user queues the
+workflow. Subsequent runs use the local snapshots.
+
+Create `ComfyUI/input/animate`, copy compatible `.fbx` files into it, and
+refresh ComfyUI before selecting an animation. The reference image is selected
+with the ordinary `Load Image` control and does not require a fixed filename.
 
 ## Supported contract
 
@@ -60,7 +97,8 @@ cd ~/Code/ComfyUI/custom_nodes/ComfyUI-Jakkanna
 ```
 
 The run identity covers the image and FBX hashes, camera/render settings, root
-motion, and Jakkanna commit. Outputs are isolated under:
+motion, Jakkanna package version, and the Git commit when installed from a
+source checkout. Outputs are isolated under:
 
 ```text
 ComfyUI/input/jakkanna_animate/<name>-<identity>/
@@ -76,7 +114,8 @@ ComfyUI/input/jakkanna_animate/<name>-<identity>/
 ```
 
 Fits are cached separately by reference-image hash, fit threshold, and Jakkanna
-commit. A different photograph cannot silently reuse an earlier fit.
+release identity. Registry upgrades and different photographs cannot silently
+reuse an earlier fit.
 
 Review all four images in `review/` before running SCAIL-2. A good frame-zero
 overlay means SCAIL-2 can concentrate on appearance transfer instead of
