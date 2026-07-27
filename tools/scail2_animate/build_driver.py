@@ -451,7 +451,6 @@ def main() -> None:
             "preserved_root_motion_focal": preserved_focal,
             "camera_preset": {
                 "requested": args.camera_preset,
-                "resolved": args.camera_preset,
                 "vertical_fraction": vertical_fraction,
                 "roll_degrees": roll_degrees,
                 "allowed_border_clipping": list(preset["allowed_border_clipping"]),

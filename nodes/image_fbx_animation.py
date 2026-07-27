@@ -2,15 +2,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import queue
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 
 import cv2
 import numpy as np
 import torch
 
 import comfy.model_management
+import comfy.utils
 import folder_paths
 
 from ..camera_presets import (
@@ -24,6 +28,62 @@ _JAKKANNA_ROOT = Path(__file__).resolve().parents[1]
 _RUN_ALL = _JAKKANNA_ROOT / "tools" / "scail2_animate" / "run_all.py"
 _MINIMUM_IMAGE_EDGE = 720
 _MAXIMUM_IMAGE_PIXELS = 4096 * 4096
+_PREPARED_FRAMES = 81
+
+# build_driver.py reports "  frame  12/81  t=0.750s  coverage=..." as it rasterises.
+_PROGRESS_LINE = re.compile(r"^\s*frame\s+(\d+)\s*/\s*(\d+)\b")
+_OUTPUT_POLL_SECONDS = 0.25
+_TERMINATE_GRACE_SECONDS = 10
+
+
+def _drain(stream, sink):
+    """Feed a child's merged output into `sink`, then signal end of stream with None."""
+    try:
+        for line in stream:
+            sink.put(line)
+    except (OSError, ValueError):
+        # The pipe was closed underneath us while the child was being terminated.
+        pass
+    finally:
+        sink.put(None)
+
+
+def _terminate(process):
+    """Stop a preparation child that outlived its node, escalating if it ignores SIGTERM."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _mirror_progress(process, total_frames):
+    """Mirror a child's output to the log, reporting progress and honouring cancellation.
+
+    Preparation runs for minutes and holds a CUDA context of its own, so its output is
+    drained on a worker thread. That keeps this thread free to notice a cancelled queue
+    instead of blocking until the child happens to emit its next line.
+    """
+    lines = queue.Queue()
+    reader = threading.Thread(target=_drain, args=(process.stdout, lines), daemon=True)
+    reader.start()
+
+    progress = comfy.utils.ProgressBar(total_frames)
+    while True:
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        try:
+            line = lines.get(timeout=_OUTPUT_POLL_SECONDS)
+        except queue.Empty:
+            continue
+        if line is None:
+            return
+        print(line, end="")
+        rendered = _PROGRESS_LINE.match(line)
+        if rendered is not None:
+            progress.update_absolute(int(rendered.group(1)) + 1, int(rendered.group(2)))
 
 
 def _file_sha256(path):
@@ -273,6 +333,7 @@ class JakkannaImageFBXPrepare:
             command.extend(("--subject-mask", str(subject_mask_path)))
 
         comfy.model_management.unload_all_models()
+        process = None
         try:
             process = subprocess.Popen(
                 command,
@@ -284,13 +345,21 @@ class JakkannaImageFBXPrepare:
             )
             if process.stdout is None:
                 raise RuntimeError("Image/FBX preparation did not expose its progress stream")
-            for line in process.stdout:
-                print(line, end="")
+            _mirror_progress(process, _PREPARED_FRAMES)
             return_code = process.wait()
             if return_code:
                 raise RuntimeError(f"Image/FBX preparation failed with exit code {return_code}")
             result = json.loads(result_path.read_text())
+        except BaseException:
+            # Interruption arrives as InterruptProcessingException, which derives from
+            # BaseException. Whatever the cause, an orphaned child would keep a second
+            # CUDA context alive long after this node released its own models.
+            if process is not None:
+                _terminate(process)
+            raise
         finally:
+            if process is not None and process.stdout is not None:
+                process.stdout.close()
             result_path.unlink(missing_ok=True)
 
         run_dir = Path(result["run_dir"]).resolve()
@@ -315,8 +384,10 @@ class JakkannaImageFBXPrepare:
             report["workflow_input"]["subject_mask"] = subject_mask_metadata
 
         frames = report.get("settings", {}).get("frames")
-        if frames != 81:
-            raise ValueError(f"Prepared run contains {frames} frames; expected 81")
+        if frames != _PREPARED_FRAMES:
+            raise ValueError(
+                f"Prepared run contains {frames} frames; expected {_PREPARED_FRAMES}"
+            )
         artifacts = report.get("artifacts", {})
         driver = _load_rgb_sequence(run_dir, artifacts["driver"], frames)
         driving_mask = _load_rgb_sequence(run_dir, artifacts["driving_mask"], frames)

@@ -95,22 +95,22 @@ def workflow(
             "filename_prefix": f"{output_prefix}/reference/SCAIL2_reference",
         }),
 
-        "V1": ("CreateVideo", {"images": ["D1", 0], "fps": 16.0, "bit_depth": 8}),
-        "V2": ("JakkannaSCAIL2ProductionInputValidate", {
-            "source_video": ["V1", 0],
-            "reference_image": ["R2", 0],
-        }),
+        # The prepared driver is already an IMAGE batch of exactly 81 frames at the
+        # canonical rate. Wrapping it in CreateVideo only to have
+        # JakkannaSCAIL2ProductionInputValidate re-derive a frame rate this graph itself
+        # typed in asserted a constant; the prepared gate below validates the batch
+        # directly and publishes the canvas, rate, and input report the graph needs.
         "V3": ("JakkannaSCAIL2PreparedTrackValidate", {
             "source_images": ["D1", 0],
             "driving_mask_images": ["D2", 0],
             "registered_reference": ["R1", 0],
             "reference_mask": ["S4", 0],
-            "expected_frames": ["V2", 2],
             "preprocess_report": ["P0", 0],
             "maximum_area_step_ratio": 2.0,
             "maximum_centroid_jump": 0.15,
             "minimum_adjacent_iou": 0.1,
             "minimum_border_margin": 0.005,
+            "minimum_registration_iou": 0.35,
         }),
 
         "W1": ("UNETLoader", {
@@ -146,8 +146,8 @@ def workflow(
             "positive": ["W5", 0],
             "negative": ["W6", 0],
             "vae": ["W7", 0],
-            "width": ["V2", 0],
-            "height": ["V2", 1],
+            "width": ["V3", 4],
+            "height": ["V3", 5],
             "length": ["V3", 2],
             "batch_size": 1,
             "pose_video": ["D1", 0],
@@ -184,14 +184,18 @@ def workflow(
             "noise": ["C6", 0],
             "guider": ["C2", 0],
             "sampler": ["C3", 0],
-            "sigmas": ["C4", 0],
+            "sigmas": ["C9", 0],
             "latent_image": ["C1", 2],
         }),
+        # Sits between the schedule and the sampler so a sampler/scheduler/CFG/LoRA
+        # mismatch stops the run here, rather than after the sampled latent has been
+        # decoded and the manifest is being written.
+        "C9": ("JakkannaSCAIL2SamplerValidate", {"sigmas": ["C4", 0]}),
         "C8": ("VAEDecode", {"samples": ["C7", 1], "vae": ["W7", 0]}),
 
         "O1": ("CreateVideo", {
             "images": ["C8", 0],
-            "fps": ["V2", 3],
+            "fps": ["V3", 6],
             "bit_depth": 10,
         }),
         "O2": ("SaveVideo", {
@@ -202,7 +206,7 @@ def workflow(
         }),
         "O3": ("VHS_VideoCombine", {
             "images": ["C8", 0],
-            "frame_rate": ["V2", 3],
+            "frame_rate": ["V3", 6],
             "loop_count": 0,
             "filename_prefix": f"{output_prefix}/master/SCAIL2_Animate",
             "format": "video/ffv1-rgb-mkv.json",
@@ -222,7 +226,7 @@ def workflow(
             "output_images": ["C8", 0],
             "pose_video_mask": ["D2", 0],
             "reference_image_mask": ["M4", 0],
-            "input_report": ["V2", 4],
+            "input_report": ["V3", 3],
             "reference_report": ["R3", 0],
             "source_initial_mask_report": ["V3", 0],
             "reference_mask_report": ["S4", 1],
@@ -249,7 +253,7 @@ def workflow(
             "cfg": 1.0,
             "effective_flow_shift": 0.0,
             "mode": "animation",
-            "sigmas": ["C4", 0],
+            "sigmas": ["C9", 0],
             "source_images": ["D1", 0],
             "reference_image": ["R2", 0],
             "preprocess_report": ["P0", 0],
@@ -270,10 +274,10 @@ TITLES = {
     "S4": "Single reference-subject gate",
     "R2": "Subject-on-black SCAIL reference",
     "R3": "Lossless reference and provenance",
-    "V2": "Raw 81-frame / 16 fps input gate",
-    "V3": "Prepared track, palette, and provenance gate",
+    "V3": "Prepared batch, track, palette, and provenance gate",
     "C1": "SCAIL-2 animation mode",
     "C4": "Six-step native shift-8 schedule",
+    "C9": "Pre-sampling sampler and schedule gate",
     "O2": "Review MP4",
     "O3": "Lossless FFV1 master",
     "O4": "Production manifest",
@@ -282,8 +286,8 @@ TITLES = {
 COLUMNS = {
     **{name: 0 for name in ("R1", "D1", "D2", "P0", "P1", "N1")},
     **{name: 1 for name in ("S1", "S2", "S3", "S4", "M1", "M2", "M3", "M4", "B1", "R2", "R3")},
-    **{name: 2 for name in ("V1", "V2", "V3", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9")},
-    **{name: 3 for name in ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")},
+    **{name: 2 for name in ("V3", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9")},
+    **{name: 3 for name in ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9")},
     **{name: 4 for name in ("O1", "O2", "O3", "O4", "Q1", "Q2", "Q3")},
 }
 

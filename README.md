@@ -169,16 +169,14 @@ path: wiring an arbitrary photograph directly into the Krea workflow would
 discard the reference/driver registration that makes the animation reliable.
 The bundled
 [Greenfield Image + FBX workflow](workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
-reduces this path to three intended controls: reference image, FBX selection,
-and customization prompt. Its preparation, retargeting, framing, validation,
-sampling, and manifests run automatically. SAM 3.1 isolates the person before
-SAM 3D Body fitting and again after camera registration; the user does not
-provide or adjust either mask. The current animation-directory
+reduces this path to four intended controls: reference image, FBX selection,
+camera preset, and customization prompt. Its preparation, retargeting, framing,
+validation, sampling, and manifests run automatically. SAM 3.1 isolates the
+person before SAM 3D Body fitting and again after camera registration; the user
+does not provide or adjust either mask. The current animation-directory
 compatibility results are recorded in
 [the FBX input audit](docs/FBX_INPUT_AUDIT.md).
-The sibling
-[Camera Presets workflow](workflows/Jakkanna_Image_FBX_Animate_Camera_Presets.json)
-adds a fourth control with deterministic full, American, medium, close, and
+The camera preset offers deterministic full, American, medium, close, and
 Dutch-roll shot choices. It retains a fixed camera across the clip and applies
 the same transform to the photograph, driver, and masks. Camera angles that
 would reveal an unseen side of the subject are excluded because they require

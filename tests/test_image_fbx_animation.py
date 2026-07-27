@@ -1,8 +1,14 @@
 import hashlib
+import importlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import textwrap
+import threading
+import types
 import unittest
 from unittest import mock
 
@@ -16,13 +22,69 @@ sys.path.insert(0, str(TOOLS))
 import audit_fbx
 import build_driver
 import camera_presets
-import make_camera_preset_workflow
 import make_greenfield_workflow
 import make_workflow
+import prune_runs
 import render
 import run_all
 import workflow_builder
 from _env import package_version, release_identity, safe_name
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_image_fbx_node():
+    """Import the node module against stubs, so the suite runs without ComfyUI."""
+    package = sys.modules.get("ComfyUI_Jakkanna")
+    if package is None:
+        package = types.ModuleType("ComfyUI_Jakkanna")
+        package.__path__ = [str(ROOT)]
+        sys.modules[package.__name__] = package
+    nodes_package = sys.modules.get("ComfyUI_Jakkanna.nodes")
+    if nodes_package is None:
+        nodes_package = types.ModuleType("ComfyUI_Jakkanna.nodes")
+        nodes_package.__path__ = [str(ROOT / "nodes")]
+        sys.modules[nodes_package.__name__] = nodes_package
+
+    folder_paths = sys.modules.setdefault("folder_paths", types.ModuleType("folder_paths"))
+    folder_paths.get_input_directory = tempfile.gettempdir
+    folder_paths.get_temp_directory = tempfile.gettempdir
+    folder_paths.get_user_directory = tempfile.gettempdir
+    if not hasattr(folder_paths, "folder_names_and_paths"):
+        folder_paths.folder_names_and_paths = {}
+
+    comfy = sys.modules.get("comfy")
+    if comfy is None:
+        comfy = types.ModuleType("comfy")
+        comfy.__path__ = []
+        sys.modules["comfy"] = comfy
+    model_management = sys.modules.get("comfy.model_management")
+    if model_management is None:
+        model_management = types.ModuleType("comfy.model_management")
+        sys.modules["comfy.model_management"] = model_management
+        comfy.model_management = model_management
+    model_management.unload_all_models = lambda: None
+    model_management.throw_exception_if_processing_interrupted = lambda: None
+
+    utils = types.ModuleType("comfy.utils")
+
+    class ProgressBar:
+        def __init__(self, total, node_id=None):
+            self.total = total
+            self.updates = []
+
+        def update_absolute(self, value, total=None, preview=None):
+            self.updates.append((value, total))
+
+    utils.ProgressBar = ProgressBar
+    comfy.utils = utils
+    sys.modules["comfy.utils"] = utils
+
+    return importlib.import_module("ComfyUI_Jakkanna.nodes.image_fbx_animation")
+
+
+image_fbx_animation = load_image_fbx_node()
 
 
 class CameraPresetTests(unittest.TestCase):
@@ -338,6 +400,17 @@ class WorkflowContractTests(unittest.TestCase):
         node_types = {node_type for node_type, _ in self.graph.values()}
         self.assertNotIn("SAM3_VideoTrack", node_types)
         self.assertNotIn("ImageListToImageBatch", node_types)
+        # The prepared driver is already an 81-frame batch. Wrapping it in a VIDEO only
+        # to have the raw-input gate re-derive a frame rate this graph typed in asserted
+        # a constant; the prepared gate now publishes the canvas, rate, and report.
+        self.assertNotIn("CreateVideo", {
+            node_type for name, (node_type, _) in self.graph.items() if name.startswith("V")
+        })
+        self.assertNotIn("JakkannaSCAIL2ProductionInputValidate", node_types)
+        self.assertEqual(self.graph["C1"][1]["width"], ["V3", 4])
+        self.assertEqual(self.graph["C1"][1]["height"], ["V3", 5])
+        self.assertEqual(self.graph["O4"][1]["input_report"], ["V3", 3])
+        self.assertEqual(self.graph["O1"][1]["fps"], ["V3", 6])
         self.assertEqual(
             self.graph["C1"][1]["pose_video"],
             ["D1", 0],
@@ -397,7 +470,7 @@ class GreenfieldWorkflowTests(unittest.TestCase):
     def test_prepared_outputs_replace_all_run_directory_loaders(self):
         node_types = {node_type for node_type, _inputs in self.graph.values()}
         self.assertNotIn("VHS_LoadImages", node_types)
-        self.assertEqual(self.graph["V1"][1]["images"], ["F1", 0])
+        self.assertEqual(self.graph["V3"][1]["source_images"], ["F1", 0])
         self.assertEqual(self.graph["V3"][1]["driving_mask_images"], ["F1", 1])
         self.assertEqual(self.graph["V3"][1]["registered_reference"], ["F1", 2])
         self.assertEqual(self.graph["V3"][1]["preprocess_report"], ["F1", 3])
@@ -418,27 +491,225 @@ class GreenfieldWorkflowTests(unittest.TestCase):
         self.assertEqual(self.graph["C1"][1]["pose_video"], ["F1", 0])
         self.assertEqual(self.graph["C1"][1]["pose_video_mask"], ["F1", 1])
 
-    def test_camera_preset_workflow_exposes_the_fourth_control(self):
-        graph = make_camera_preset_workflow.camera_preset_workflow(
+    def test_camera_preset_is_always_emitted_and_defaults_to_auto(self):
+        # The node renders camera_preset as a widget from its own INPUT_TYPES, so
+        # the control is visible whether or not the graph names it. Emitting it
+        # explicitly keeps the shipped file honest about what the user can change.
+        self.assertEqual(self.graph["F1"][1]["camera_preset"], camera_presets.AUTO_CAMERA_PRESET)
+        self.assertEqual(
+            make_greenfield_workflow.TITLES["F1"],
+            "2–3 · FBX animation and camera preset",
+        )
+        self.assertEqual(make_greenfield_workflow.TITLES["P1"], "4 · Customization prompt")
+
+    def test_camera_preset_can_be_baked_and_is_validated(self):
+        graph = make_greenfield_workflow.greenfield_workflow(
             "ref_pic/luc.jpg",
             "dance.fbx",
-            "American / Cowboy Shot",
             "preserve the subject",
             42,
-        )
-
-        self.assertEqual(
-            make_camera_preset_workflow.VISIBLE,
-            {"I1", "F1", "P1"},
-        )
-        self.assertEqual(
-            graph["F1"][1]["camera_preset"],
             "American / Cowboy Shot",
         )
-        self.assertEqual(
-            make_camera_preset_workflow.TITLES["P1"],
-            "4 · Customization prompt",
+        self.assertEqual(graph["F1"][1]["camera_preset"], "American / Cowboy Shot")
+
+        with self.assertRaisesRegex(ValueError, "Unsupported camera preset"):
+            make_greenfield_workflow.greenfield_workflow(
+                "ref_pic/luc.jpg", "dance.fbx", "", 42, "Bird's-eye View"
+            )
+
+    def test_registration_floor_is_wired_into_the_prepared_track_gate(self):
+        self.assertEqual(self.graph["V3"][1]["minimum_registration_iou"], 0.35)
+
+    def test_sampler_gate_sits_between_the_schedule_and_the_sampler(self):
+        # Both the sampler and the manifest consume the gate's schedule, so the gate is
+        # on the execution path and a mismatch cannot be discovered after the decode.
+        self.assertEqual(self.graph["C9"][0], "JakkannaSCAIL2SamplerValidate")
+        self.assertEqual(self.graph["C9"][1]["sigmas"], ["C4", 0])
+        self.assertEqual(self.graph["C7"][1]["sigmas"], ["C9", 0])
+        self.assertEqual(self.graph["O4"][1]["sigmas"], ["C9", 0])
+
+
+class PruneSelectionTests(unittest.TestCase):
+    """This selection decides what gets deleted, and a prepared run costs a body fit
+    plus an 81-frame render to rebuild."""
+
+    def _run(self, name, mtime, key="a", size=1):
+        return {"path": Path("/runs") / name, "mtime": mtime, "size": size,
+                "identity": "1.4.0+abc", "key": key, "image": None, "subject_mask": None}
+
+    def test_keeps_the_newest_run_of_each_input_combination(self):
+        newest = self._run("new", 200)
+        older = self._run("old", 100)
+
+        kept, retire = prune_runs.select([older, newest], keep=1, workflow_text="")
+
+        self.assertEqual([r["path"].name for r in kept], ["new"])
+        self.assertEqual([r["path"].name for r in retire], ["old"])
+        self.assertEqual(kept[0]["reason"], "newest")
+
+    def test_never_retires_a_run_a_workflow_still_loads(self):
+        newest = self._run("new", 200)
+        older = self._run("cited", 100)
+
+        kept, retire = prune_runs.select(
+            [older, newest], keep=1,
+            workflow_text='{"directory": "jakkanna_animate/cited/driver"}',
         )
+
+        self.assertEqual(retire, [])
+        self.assertEqual(
+            sorted((r["path"].name, r["reason"]) for r in kept),
+            [("cited", "referenced by a workflow"), ("new", "newest")],
+        )
+
+    def test_different_settings_are_never_pruned_against_each_other(self):
+        # The no-mask and mask-guided fits of one image are separate combinations.
+        runs = [self._run("nomask", 100, key="a"), self._run("mask", 200, key="b")]
+
+        kept, retire = prune_runs.select(runs, keep=1, workflow_text="")
+
+        self.assertEqual(retire, [])
+        self.assertEqual(len(kept), 2)
+
+    def test_keep_retains_a_generation_of_history(self):
+        runs = [self._run(f"r{i}", i) for i in range(4)]
+
+        kept, retire = prune_runs.select(runs, keep=2, workflow_text="")
+
+        self.assertEqual(sorted(r["path"].name for r in kept), ["r2", "r3"])
+        self.assertEqual(sorted(r["path"].name for r in retire), ["r0", "r1"])
+
+    def test_identity_settings_mirror_the_run_identity_hash(self):
+        # If run_all starts hashing a setting this does not group on, two runs that
+        # differ in it would look interchangeable and one would be deleted.
+        settings = {
+            "frames": 81, "fps": 16.0, "start_seconds": 0.0, "timing": "auto",
+            "width": 704, "height": 1280, "framing": "full_body",
+            "camera_preset": "Auto Director", "margin": 0.06, "ease_frames": 12,
+            "root_motion": "auto", "supersample": 3, "bbox_threshold": 0.8,
+        }
+        self.assertEqual(set(prune_runs.IDENTITY_SETTINGS), set(settings))
+
+
+class PreparationChildProcessTests(unittest.TestCase):
+    """The preparation child holds its own CUDA context, so it must never outlive the node."""
+
+    def _spawn(self, body):
+        process = subprocess.Popen(
+            [sys.executable, "-c", textwrap.dedent(body)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        self.addCleanup(process.stdout.close)
+        return process
+
+    def test_terminate_stops_a_running_child(self):
+        process = self._spawn("import time; time.sleep(120)")
+        image_fbx_animation._terminate(process)
+        self.assertIsNotNone(process.poll())
+
+    def test_terminate_escalates_when_the_child_ignores_sigterm(self):
+        if os.name != "posix":
+            self.skipTest("SIGTERM handling is POSIX-specific")
+        process = self._spawn(
+            """
+            import signal, sys, time
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            print("ready", flush=True)
+            time.sleep(120)
+            """
+        )
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+
+        with mock.patch.object(image_fbx_animation, "_TERMINATE_GRACE_SECONDS", 0.5):
+            image_fbx_animation._terminate(process)
+
+        self.assertIsNotNone(process.poll())
+
+    def test_terminate_is_a_no_op_for_a_child_that_already_exited(self):
+        process = self._spawn("pass")
+        process.wait()
+        image_fbx_animation._terminate(process)
+        self.assertEqual(process.returncode, 0)
+
+
+class PreparationProgressTests(unittest.TestCase):
+    class FakeProcess:
+        """A child that emits `lines`, then either ends or keeps the pipe open."""
+
+        def __init__(self, lines, block=False):
+            self._lines = list(lines)
+            self._block = block
+            self.released = threading.Event()
+
+        @property
+        def stdout(self):
+            def generate():
+                for line in self._lines:
+                    yield line
+                if self._block:
+                    self.released.wait(30)
+            return generate()
+
+    def test_mirrors_output_and_reports_rendered_frames(self):
+        process = self.FakeProcess([
+            "=== fit_reference.py --image ...\n",
+            "[driver] clip 'dance.fbx' 6.20s\n",
+            "  frame   0/81  t= 0.000s  coverage= 8.11%\n",
+            "  frame  80/81  t= 5.000s  coverage= 9.02%\n",
+        ])
+        bar = image_fbx_animation.comfy.utils.ProgressBar(81)
+        printed = []
+        with mock.patch.object(
+            image_fbx_animation.comfy.utils, "ProgressBar", return_value=bar
+        ):
+            with mock.patch("builtins.print", lambda *a, **k: printed.append(a[0])):
+                image_fbx_animation._mirror_progress(process, 81)
+
+        # Every line reaches the log, but only the frame lines advance the bar, and the
+        # counter is 0-based on the wire.
+        self.assertEqual(len(printed), 4)
+        self.assertEqual(bar.updates, [(1, 81), (81, 81)])
+
+    def test_cancellation_is_noticed_while_the_child_is_still_talking(self):
+        process = self.FakeProcess(["  frame   0/81  t= 0.000s\n"], block=True)
+        self.addCleanup(process.released.set)
+
+        calls = []
+
+        def interrupt_on_third_poll():
+            calls.append(1)
+            if len(calls) >= 3:
+                raise KeyboardInterrupt("queue cancelled")
+
+        with mock.patch.object(
+            image_fbx_animation.comfy.model_management,
+            "throw_exception_if_processing_interrupted",
+            interrupt_on_third_poll,
+        ):
+            with mock.patch("builtins.print"):
+                with self.assertRaises(KeyboardInterrupt):
+                    image_fbx_animation._mirror_progress(process, 81)
+
+    def test_drain_always_signals_end_of_stream(self):
+        import queue as queue_module
+
+        sink = queue_module.Queue()
+        image_fbx_animation._drain(iter(["one\n", "two\n"]), sink)
+        self.assertEqual(sink.get_nowait(), "one\n")
+        self.assertEqual(sink.get_nowait(), "two\n")
+        self.assertIsNone(sink.get_nowait())
+
+        def exploding():
+            yield "one\n"
+            raise ValueError("pipe closed under us")
+
+        sink = queue_module.Queue()
+        image_fbx_animation._drain(exploding(), sink)
+        self.assertEqual(sink.get_nowait(), "one\n")
+        self.assertIsNone(sink.get_nowait())
 
 
 if __name__ == "__main__":

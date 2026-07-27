@@ -26,6 +26,20 @@ from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
 UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
 
+# Frame-zero registration floor, calibrated against the prepared runs whose
+# review overlays were inspected: usable fits measured 0.58 (imperfect body
+# proportions, registration still sound) through 0.88 (tight). Occlusion,
+# clothing and intentional cropping account for most of that spread, which is
+# why the earlier 0.65 gate rejected working runs and was removed outright.
+# This floor sits below every fit observed to be usable and above the collapse
+# expected from a fit at the wrong depth, scale, or orientation, so it catches
+# gross failure only.
+_DEFAULT_REGISTRATION_IOU = 0.35
+
+# The two canvases SCAIL-2 was trained on.
+_SCAIL2_CANVASES = {(704, 1280), (1280, 704)}
+_SCAIL2_FPS = 16.0
+
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
 if _vhs_entry is None:
@@ -45,14 +59,23 @@ def _hash_file(path):
     return digest.hexdigest()
 
 
-_HASH_CACHE_PATH = Path(folder_paths.get_temp_directory()) / "jakkanna_scail2_model_hash_cache.json"
+def _hash_cache_path():
+    """Where the model-weight hash cache lives.
+
+    Deliberately not ComfyUI's temp directory: main.py rmtrees that on both startup
+    and shutdown, so a cache kept there is always cold and the manifest re-reads every
+    model file — tens of gigabytes — at the end of the first generation after each
+    restart. The user directory survives restarts and is not part of any checkout.
+    """
+    return Path(folder_paths.get_user_directory()) / "jakkanna" / "scail2_model_hash_cache.json"
 
 
 def _hash_file_cached(path):
     path = os.path.realpath(path)
     stat = os.stat(path)
+    cache_path = _hash_cache_path()
     try:
-        cache = json.loads(_HASH_CACHE_PATH.read_text())
+        cache = json.loads(cache_path.read_text())
     except (OSError, ValueError):
         cache = {}
     entry = cache.get(path)
@@ -64,11 +87,12 @@ def _hash_file_cached(path):
         return entry["sha256"]
     digest = _hash_file(path)
     cache[path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": digest}
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
-        dir=_HASH_CACHE_PATH.parent,
-        prefix=f".{_HASH_CACHE_PATH.name}.",
+        dir=cache_path.parent,
+        prefix=f".{cache_path.name}.",
         suffix=".tmp",
         delete=False,
     ) as handle:
@@ -76,7 +100,7 @@ def _hash_file_cached(path):
         handle.write("\n")
         temp_path = Path(handle.name)
     try:
-        temp_path.replace(_HASH_CACHE_PATH)
+        temp_path.replace(cache_path)
     finally:
         temp_path.unlink(missing_ok=True)
     return digest
@@ -184,6 +208,7 @@ _GRAPH_SETTING_INPUTS = {
         "maximum_centroid_jump",
         "minimum_adjacent_iou",
         "minimum_border_margin",
+        "minimum_registration_iou",
     ),
 }
 
@@ -606,17 +631,46 @@ class JakkannaSCAIL2PreparedTrackValidate:
                 "driving_mask_images": ("IMAGE",),
                 "registered_reference": ("IMAGE",),
                 "reference_mask": ("MASK",),
-                "expected_frames": ("INT", {"forceInput": True}),
                 "preprocess_report": ("STRING", {"forceInput": True}),
                 "maximum_area_step_ratio": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 100.0, "step": 0.1}),
                 "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "minimum_adjacent_iou": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "minimum_border_margin": ("FLOAT", {"default": 0.005, "min": 0.0, "max": 0.25, "step": 0.001}),
-            }
+                "minimum_registration_iou": ("FLOAT", {
+                    "default": _DEFAULT_REGISTRATION_IOU,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Floor for the frame-zero silhouette overlap between the fitted "
+                               "mannequin and the photographed subject, measured only over the "
+                               "region the photograph actually shows. Catches a body fit at the "
+                               "wrong depth, scale, or orientation before generation runs. Well-"
+                               "registered runs measure 0.85 or better; clothing, occlusion, and "
+                               "intentional cropping lower it legitimately, so the default is "
+                               "deliberately loose. Set to 0 to record the value without gating.",
+                }),
+            },
+            "optional": {
+                "expected_frames": ("INT", {
+                    "forceInput": True,
+                    "tooltip": "Optional external frame count to cross-check. A prepared run "
+                               "already carries its own frame count, which is checked against the "
+                               "batch either way, so this is only useful when an independent "
+                               "source of truth exists.",
+                }),
+            },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("source_initial_mask_report", "track_report", "validated_frames")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING", "INT", "INT", "FLOAT")
+    RETURN_NAMES = (
+        "source_initial_mask_report",
+        "track_report",
+        "validated_frames",
+        "input_report",
+        "width",
+        "height",
+        "fps",
+    )
     FUNCTION = "validate"
     CATEGORY = "Jakkanna/SCAIL-2"
 
@@ -626,18 +680,23 @@ class JakkannaSCAIL2PreparedTrackValidate:
         driving_mask_images,
         registered_reference,
         reference_mask,
-        expected_frames,
         preprocess_report,
         maximum_area_step_ratio,
         maximum_centroid_jump,
         minimum_adjacent_iou,
         minimum_border_margin,
+        minimum_registration_iou=_DEFAULT_REGISTRATION_IOU,
+        expected_frames=None,
     ):
         if source_images.ndim != 4 or source_images.shape[-1] < 3:
             raise ValueError("Prepared source must provide an IMAGE tensor batch")
         frames, height, width = source_images.shape[:3]
-        if frames != expected_frames:
+        if expected_frames is not None and frames != expected_frames:
             raise ValueError(f"Prepared source has {frames} frames; expected {expected_frames}")
+        if (width, height) not in _SCAIL2_CANVASES:
+            raise ValueError(
+                f"Prepared source must be 704x1280 or 1280x704, got {width}x{height}"
+            )
         if driving_mask_images.ndim != 4 or driving_mask_images.shape[-1] < 3:
             raise ValueError("Prepared driving masks must provide an RGB IMAGE tensor batch")
         if driving_mask_images.shape[:3] != source_images.shape[:3]:
@@ -689,11 +748,25 @@ class JakkannaSCAIL2PreparedTrackValidate:
             raise ValueError(
                 f"Prepared camera preset {requested_preset!r} has invalid border-clipping provenance"
             )
-        if preset_report and preset_report.get("resolved") != requested_preset:
-            raise ValueError("Prepared camera preset was silently replaced")
         if prepared.get("settings", {}).get("camera_preset", AUTO_CAMERA_PRESET) != requested_preset:
             raise ValueError("Prepared camera preset settings do not match registration provenance")
+
         visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
+        if minimum_registration_iou > 0:
+            if isinstance(visible_iou, bool) or not isinstance(visible_iou, (int, float)):
+                raise ValueError(
+                    "Prepared input report carries no frame-zero registration IoU; re-run "
+                    "preparation, or set minimum_registration_iou to 0 to record without gating"
+                )
+            if visible_iou < minimum_registration_iou:
+                raise ValueError(
+                    f"Frame-zero registration IoU is {visible_iou:.3f}, below the "
+                    f"{minimum_registration_iou:.3f} floor: the fitted mannequin does not land on "
+                    "the photographed subject, so the reference and driver are not registered to "
+                    "one camera. Review review/driver_frame0_over_reference.jpg in the prepared "
+                    "run directory. Lower minimum_registration_iou only once that overlay confirms "
+                    "the mismatch is clothing, occlusion, or intentional cropping."
+                )
 
         metrics = _track_metrics(masks)
         areas = metrics["areas"]
@@ -710,7 +783,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
         settings = prepared.get("settings", {})
         expected_settings = {
             "frames": frames,
-            "fps": 16.0,
+            "fps": _SCAIL2_FPS,
             "width": width,
             "height": height,
         }
@@ -744,6 +817,15 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "source": "prepared_render",
             "preprocess_run_id": prepared.get("run_id"),
             "frame0_subject_iou_visible": visible_iou,
+            "minimum_registration_iou": minimum_registration_iou,
+            # Preparation resolves "auto" timing and root motion on its own. Both
+            # decisions change the animation, so they are surfaced here rather than
+            # left in a run-directory manifest nobody opens on a successful run.
+            "camera_preset": requested_preset,
+            "timing_resolved": settings.get("resolved_timing"),
+            "playback_speed_ratio": settings.get("playback_speed_ratio"),
+            "root_motion_requested": settings.get("root_motion"),
+            "root_motion_resolved": settings.get("resolved_root_motion"),
             "tracking_mask_resolution": [width, height],
             "source_canvas_resolution": [width, height],
             "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),
@@ -757,7 +839,36 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "source_rgb16_sha256": source_hash,
             "driving_mask_rgb16_sha256": mask_hash,
         }
-        return _json(initial_report), _json(track_report), frames
+        # Stands in for JakkannaSCAIL2ProductionInputValidate on the prepared path. That
+        # node exists to interrogate a decoded container; here the batch never was one, so
+        # routing it through CreateVideo only to re-derive a frame rate this graph itself
+        # supplied would assert a constant rather than validate anything. Range and
+        # finiteness are guaranteed by construction: the frames are decoded from 8-bit PNGs
+        # into float32/255 by the preparation node.
+        input_report = {
+            "source_kind": "prepared_image_batch",
+            "source_rgb16_sha256": source_hash,
+            "source_dtype": str(source_images.dtype),
+            "source_device": str(source_images.device),
+            "width": width,
+            "height": height,
+            "frames": frames,
+            "fps": f"{int(_SCAIL2_FPS)}/1",
+            "canonical_fps_enforced": int(_SCAIL2_FPS),
+            "duration_seconds": float(frames / _SCAIL2_FPS),
+            "constant_frame_rate": True,
+            "color_metadata": "prepared PNG sequence; no container transfer or primaries metadata",
+            "preprocess_run_id": prepared.get("run_id"),
+        }
+        return (
+            _json(initial_report),
+            _json(track_report),
+            frames,
+            _json(input_report),
+            width,
+            height,
+            _SCAIL2_FPS,
+        )
 
 
 def _scheduler(steps, shift, device):
@@ -873,6 +984,185 @@ def _simple_flow_sigmas(shift, steps):
     return comfy.samplers.simple_scheduler(model_sampling, steps)
 
 
+_MANIFEST_DECLARED_SETTINGS = (
+    "steps",
+    "cfg",
+    "mode",
+    "sampler_name",
+    "scheduler_name",
+    "flow_shift",
+    "effective_flow_shift",
+    "dpo_lora",
+    "acceleration_lora",
+    "acceleration_lora_strength",
+)
+
+
+def _declared_manifest_settings(prompt):
+    """Read the settings the manifest node declares straight off the executed graph."""
+    node = _single_prompt_node(prompt, "JakkannaSCAIL2ProductionManifest")
+    return {
+        name: _literal_prompt_input(prompt, node, name)
+        for name in _MANIFEST_DECLARED_SETTINGS
+    }
+
+
+def _resolve_sampler_graph(prompt, declared, sigmas=None):
+    """Reconcile the executed graph against the manifest's declared sampler settings.
+
+    Not one of these mismatches needs a sampled latent to detect, which is why
+    JakkannaSCAIL2SamplerValidate runs this on the sigma schedule ahead of
+    SamplerCustomAdvanced. The manifest runs it again on the way out, so a graph
+    assembled without the gate is still checked - just later.
+    """
+    steps = declared["steps"]
+    flow_shift = declared["flow_shift"]
+    effective_flow_shift = declared["effective_flow_shift"] or 0.0
+    effective_shift = effective_flow_shift if effective_flow_shift > 0 else flow_shift
+
+    resolved = {
+        "sampler": declared["sampler_name"],
+        "scheduler": declared["scheduler_name"],
+        "steps": steps,
+        "cfg": declared["cfg"],
+        "mode": declared["mode"],
+        "effective_flow_shift": effective_shift,
+        "dpo_lora_strength": None,
+        "pose_settings": {"pose_strength": None, "pose_start": None, "pose_end": None},
+        "clip_vision_crop": None,
+        "sigma_schedule": None,
+    }
+
+    if sigmas is not None:
+        expected = _simple_flow_sigmas(effective_shift, steps)
+        wired = sigmas.detach().cpu().float()
+        if wired.shape != expected.shape or not torch.equal(wired, expected):
+            raise ValueError(
+                "Wired sigma schedule is not the Euler/simple flow schedule at "
+                f"effective_flow_shift={effective_shift:g} with {steps} steps: "
+                f"got {[round(float(s), 6) for s in wired]}, "
+                f"expected {[round(float(s), 6) for s in expected]}"
+            )
+        resolved["sigma_schedule"] = [float(s) for s in wired]
+
+    if not prompt:
+        return resolved
+
+    guider_node = _single_prompt_node(prompt, "CFGGuider")
+    scail_node = _single_prompt_node(prompt, "WanSCAILToVideo")
+    clip_vision_node = _single_prompt_node(prompt, "CLIPVisionEncode")
+
+    scheduler_nodes = _prompt_nodes(prompt, "BasicScheduler")
+    flow_unipc_nodes = _prompt_nodes(prompt, "JakkannaSCAIL2FlowUniPC")
+    if len(scheduler_nodes) + len(flow_unipc_nodes) != 1:
+        raise ValueError(
+            "Manifest requires exactly one BasicScheduler or "
+            f"JakkannaSCAIL2FlowUniPC node, got {len(scheduler_nodes) + len(flow_unipc_nodes)}"
+        )
+    if scheduler_nodes:
+        sampler_node = _single_prompt_node(prompt, "KSamplerSelect")
+        scheduler_node = scheduler_nodes[0][1]
+        resolved["scheduler"] = _literal_prompt_input(prompt, scheduler_node, "scheduler")
+        resolved["steps"] = _literal_prompt_input(prompt, scheduler_node, "steps")
+        resolved["sampler"] = _literal_prompt_input(prompt, sampler_node, "sampler_name")
+    else:
+        flow_unipc_node = flow_unipc_nodes[0][1]
+        resolved["scheduler"] = "upstream Flow-UniPC"
+        resolved["sampler"] = "Flow-UniPC"
+        resolved["steps"] = _literal_prompt_input(prompt, flow_unipc_node, "steps")
+        actual_flow_shift = _literal_prompt_input(prompt, flow_unipc_node, "shift")
+        if actual_flow_shift != flow_shift:
+            raise ValueError(
+                f"Manifest flow_shift={flow_shift:g} does not match "
+                f"JakkannaSCAIL2FlowUniPC shift={actual_flow_shift}"
+            )
+    resolved["cfg"] = _literal_prompt_input(prompt, guider_node, "cfg")
+    replacement_mode = bool(_literal_prompt_input(prompt, scail_node, "replacement_mode"))
+    resolved["mode"] = "replacement" if replacement_mode else "animation"
+    resolved["pose_settings"] = {
+        name: _literal_prompt_input(prompt, scail_node, name)
+        for name in ("pose_strength", "pose_start", "pose_end")
+    }
+    resolved["clip_vision_crop"] = _literal_prompt_input(prompt, clip_vision_node, "crop")
+
+    if resolved["steps"] != steps:
+        raise ValueError(
+            f"Manifest steps={steps} does not match BasicScheduler steps={resolved['steps']}"
+        )
+    if resolved["cfg"] != declared["cfg"]:
+        raise ValueError(
+            f"Manifest cfg={declared['cfg']:g} does not match CFGGuider cfg={resolved['cfg']}"
+        )
+    if resolved["mode"] != declared["mode"]:
+        raise ValueError(
+            f"Manifest mode={declared['mode']} does not match "
+            f"WanSCAILToVideo mode={resolved['mode']}"
+        )
+    if str(resolved["sampler"]).lower() != str(declared["sampler_name"]).lower():
+        raise ValueError(
+            f"Manifest sampler={declared['sampler_name']} does not match "
+            f"KSamplerSelect sampler={resolved['sampler']}"
+        )
+
+    for _, lora_node in _prompt_nodes(prompt, "LoraLoaderModelOnly"):
+        name = _literal_prompt_input(prompt, lora_node, "lora_name")
+        strength = _literal_prompt_input(prompt, lora_node, "strength_model")
+        if name == declared["dpo_lora"]:
+            resolved["dpo_lora_strength"] = strength
+        if name == declared["acceleration_lora"] and strength != declared["acceleration_lora_strength"]:
+            raise ValueError(
+                f"Manifest acceleration LoRA strength={declared['acceleration_lora_strength']:g} "
+                f"does not match the loader strength={strength}"
+            )
+    if resolved["dpo_lora_strength"] is None:
+        raise ValueError(
+            f"Could not find the DPO LoRA loader in the prompt graph: {declared['dpo_lora']}"
+        )
+
+    return resolved
+
+
+class JakkannaSCAIL2SamplerValidate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"sigmas": ("SIGMAS",)},
+            "hidden": {"prompt": "PROMPT"},
+        }
+
+    RETURN_TYPES = ("SIGMAS", "STRING")
+    RETURN_NAMES = ("sigmas", "sampler_report")
+    FUNCTION = "validate"
+    CATEGORY = "Jakkanna/SCAIL-2"
+    DESCRIPTION = (
+        "Cross-checks the sigma schedule, sampler, scheduler, CFG, mode and LoRA "
+        "strengths against the production manifest's declared settings, and passes the "
+        "schedule through unchanged. Wire it between the scheduler and the sampler so a "
+        "mismatch stops the run before sampling rather than after the manifest is saved."
+    )
+
+    def validate(self, sigmas, prompt=None):
+        if not prompt:
+            raise ValueError(
+                "Sampler validation needs the executed prompt graph, which ComfyUI "
+                "supplies only when the workflow is queued"
+            )
+        resolved = _resolve_sampler_graph(prompt, _declared_manifest_settings(prompt), sigmas)
+        report = {
+            "validated_before_sampling": True,
+            "sampler": resolved["sampler"],
+            "scheduler": resolved["scheduler"],
+            "steps": resolved["steps"],
+            "cfg": resolved["cfg"],
+            "mode": resolved["mode"],
+            "effective_flow_shift": resolved["effective_flow_shift"],
+            "dpo_lora_strength": resolved["dpo_lora_strength"],
+            "sigma_schedule": resolved["sigma_schedule"],
+            **resolved["pose_settings"],
+        }
+        return sigmas, _json(report)
+
+
 class JakkannaSCAIL2ProductionManifest:
     @classmethod
     def INPUT_TYPES(cls):
@@ -966,19 +1256,24 @@ class JakkannaSCAIL2ProductionManifest:
         prompt=None,
         extra_pnginfo=None,
     ):
-        effective_shift = effective_flow_shift if effective_flow_shift > 0 else flow_shift
-        sigma_schedule = None
-        if sigmas is not None:
-            expected = _simple_flow_sigmas(effective_shift, steps)
-            wired = sigmas.detach().cpu().float()
-            if wired.shape != expected.shape or not torch.equal(wired, expected):
-                raise ValueError(
-                    "Wired sigma schedule is not the Euler/simple flow schedule at "
-                    f"effective_flow_shift={effective_shift:g} with {steps} steps: "
-                    f"got {[round(float(s), 6) for s in wired]}, "
-                    f"expected {[round(float(s), 6) for s in expected]}"
-                )
-            sigma_schedule = [float(s) for s in wired]
+        # JakkannaSCAIL2SamplerValidate runs exactly this reconciliation on the schedule
+        # before sampling. Repeating it here keeps a graph assembled without that gate
+        # honest, and pins the resolved values into the manifest.
+        declared = {
+            "steps": steps,
+            "cfg": cfg,
+            "mode": mode,
+            "sampler_name": sampler_name,
+            "scheduler_name": scheduler_name,
+            "flow_shift": flow_shift,
+            "effective_flow_shift": effective_flow_shift,
+            "dpo_lora": dpo_lora,
+            "acceleration_lora": acceleration_lora,
+            "acceleration_lora_strength": acceleration_lora_strength,
+        }
+        resolved = _resolve_sampler_graph(prompt, declared, sigmas)
+        effective_shift = resolved["effective_flow_shift"]
+        sigma_schedule = resolved["sigma_schedule"]
 
         actual_attention_backend = _attention_backend()
 
@@ -990,9 +1285,21 @@ class JakkannaSCAIL2ProductionManifest:
                 f"Manifest seed {seed} does not match generated noise seed {noise_data.get('seed')}"
             )
 
+        # A link hands every consumer the same tensor object, so hashing it again here
+        # cannot detect a substitution the validators missed - it only re-reads several
+        # hundred megabytes. When the track report already carries a digest that was
+        # checked against the run directory on disk, that digest is carried forward and
+        # the reports are reconciled as strings instead.
+        track_data = json.loads(track_report)
+        validated_source_hash = track_data.get("source_rgb16_sha256")
+        validated_mask_hash = track_data.get("driving_mask_rgb16_sha256")
+
         source_images_hash = None
-        if source_images is not None:
+        if validated_source_hash is not None:
+            source_images_hash = validated_source_hash
+        elif source_images is not None:
             source_images_hash = _hash_tensor(source_images[..., :3])
+        if source_images_hash is not None:
             reported_source_hash = input_data.get("source_rgb16_sha256")
             if reported_source_hash and reported_source_hash != source_images_hash:
                 raise ValueError("Raw source tensor does not match the validated production input")
@@ -1018,80 +1325,14 @@ class JakkannaSCAIL2ProductionManifest:
 
         graph_settings = _graph_settings(prompt)
         graph_artifacts = _graph_artifacts(prompt, hash_model_files)
-        actual_sampler = sampler_name
-        actual_scheduler = scheduler_name
-        actual_steps = steps
-        actual_cfg = cfg
-        actual_mode = mode
-        dpo_lora_strength = None
-        actual_pose_settings = {
-            "pose_strength": None,
-            "pose_start": None,
-            "pose_end": None,
-        }
-        clip_vision_crop = None
-
-        if prompt:
-            guider_node = _single_prompt_node(prompt, "CFGGuider")
-            scail_node = _single_prompt_node(prompt, "WanSCAILToVideo")
-            clip_vision_node = _single_prompt_node(prompt, "CLIPVisionEncode")
-
-            scheduler_nodes = _prompt_nodes(prompt, "BasicScheduler")
-            flow_unipc_nodes = _prompt_nodes(prompt, "JakkannaSCAIL2FlowUniPC")
-            if len(scheduler_nodes) + len(flow_unipc_nodes) != 1:
-                raise ValueError(
-                    "Manifest requires exactly one BasicScheduler or "
-                    f"JakkannaSCAIL2FlowUniPC node, got {len(scheduler_nodes) + len(flow_unipc_nodes)}"
-                )
-            if scheduler_nodes:
-                sampler_node = _single_prompt_node(prompt, "KSamplerSelect")
-                scheduler_node = scheduler_nodes[0][1]
-                actual_scheduler = _literal_prompt_input(prompt, scheduler_node, "scheduler")
-                actual_steps = _literal_prompt_input(prompt, scheduler_node, "steps")
-                actual_sampler = _literal_prompt_input(prompt, sampler_node, "sampler_name")
-            else:
-                flow_unipc_node = flow_unipc_nodes[0][1]
-                actual_scheduler = "upstream Flow-UniPC"
-                actual_sampler = "Flow-UniPC"
-                actual_steps = _literal_prompt_input(prompt, flow_unipc_node, "steps")
-                actual_flow_shift = _literal_prompt_input(prompt, flow_unipc_node, "shift")
-                if actual_flow_shift != flow_shift:
-                    raise ValueError(
-                        f"Manifest flow_shift={flow_shift:g} does not match "
-                        f"JakkannaSCAIL2FlowUniPC shift={actual_flow_shift}"
-                    )
-            actual_cfg = _literal_prompt_input(prompt, guider_node, "cfg")
-            replacement_mode = bool(_literal_prompt_input(prompt, scail_node, "replacement_mode"))
-            actual_mode = "replacement" if replacement_mode else "animation"
-            actual_pose_settings = {
-                name: _literal_prompt_input(prompt, scail_node, name)
-                for name in ("pose_strength", "pose_start", "pose_end")
-            }
-            clip_vision_crop = _literal_prompt_input(prompt, clip_vision_node, "crop")
-
-            if actual_steps != steps:
-                raise ValueError(f"Manifest steps={steps} does not match BasicScheduler steps={actual_steps}")
-            if actual_cfg != cfg:
-                raise ValueError(f"Manifest cfg={cfg:g} does not match CFGGuider cfg={actual_cfg}")
-            if actual_mode != mode:
-                raise ValueError(f"Manifest mode={mode} does not match WanSCAILToVideo mode={actual_mode}")
-            if str(actual_sampler).lower() != str(sampler_name).lower():
-                raise ValueError(
-                    f"Manifest sampler={sampler_name} does not match KSamplerSelect sampler={actual_sampler}"
-                )
-
-            for _, lora_node in _prompt_nodes(prompt, "LoraLoaderModelOnly"):
-                name = _literal_prompt_input(prompt, lora_node, "lora_name")
-                strength = _literal_prompt_input(prompt, lora_node, "strength_model")
-                if name == dpo_lora:
-                    dpo_lora_strength = strength
-                if name == acceleration_lora and strength != acceleration_lora_strength:
-                    raise ValueError(
-                        f"Manifest acceleration LoRA strength={acceleration_lora_strength:g} "
-                        f"does not match the loader strength={strength}"
-                    )
-            if dpo_lora_strength is None:
-                raise ValueError(f"Could not find the DPO LoRA loader in the prompt graph: {dpo_lora}")
+        actual_sampler = resolved["sampler"]
+        actual_scheduler = resolved["scheduler"]
+        actual_steps = resolved["steps"]
+        actual_cfg = resolved["cfg"]
+        actual_mode = resolved["mode"]
+        dpo_lora_strength = resolved["dpo_lora_strength"]
+        actual_pose_settings = resolved["pose_settings"]
+        clip_vision_crop = resolved["clip_vision_crop"]
 
         model_files = {
             "diffusion_model": ("diffusion_models", diffusion_model),
@@ -1145,7 +1386,11 @@ class JakkannaSCAIL2ProductionManifest:
             pose_studio_id = parsed_pose_data.get("studio_id")
 
         workflow = (extra_pnginfo or {}).get("workflow")
-        pose_video_mask_hash = _hash_tensor(pose_video_mask)
+        pose_video_mask_hash = (
+            validated_mask_hash
+            if validated_mask_hash is not None
+            else _hash_tensor(pose_video_mask)
+        )
         if prepared_input is not None:
             prepared_mask_hash = prepared_input.get("artifacts", {}).get("driving_mask", {}).get("rgb16_sha256")
             if prepared_mask_hash != pose_video_mask_hash:
@@ -1189,7 +1434,7 @@ class JakkannaSCAIL2ProductionManifest:
             "reference": reference_data,
             "source_initial_mask": json.loads(source_initial_mask_report),
             "reference_mask": json.loads(reference_mask_report),
-            "source_track": json.loads(track_report),
+            "source_track": track_data,
             "noise": noise_data,
             "source_capture_rgb16_sha256": source_images_hash,
             "reference_input_rgb16_sha256": reference_image_hash,
@@ -1224,6 +1469,7 @@ class JakkannaSCAIL2ProductionManifest:
 NODE_CLASS_MAPPINGS = {
     "JakkannaSCAIL2FlowUniPC": JakkannaSCAIL2FlowUniPC,
     "JakkannaSCAIL2ProductionInputValidate": JakkannaSCAIL2ProductionInputValidate,
+    "JakkannaSCAIL2SamplerValidate": JakkannaSCAIL2SamplerValidate,
     "JakkannaSCAIL2SingleSubjectMask": JakkannaSCAIL2SingleSubjectMask,
     "JakkannaSCAIL2ReferencePNG16Save": JakkannaSCAIL2ReferencePNG16Save,
     "JakkannaSCAIL2TrackValidate": JakkannaSCAIL2TrackValidate,
@@ -1235,6 +1481,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "JakkannaSCAIL2FlowUniPC": "Jakkanna SCAIL-2 Flow-UniPC",
     "JakkannaSCAIL2ProductionInputValidate": "Jakkanna SCAIL-2 Validate Input",
+    "JakkannaSCAIL2SamplerValidate": "Jakkanna SCAIL-2 Validate Sampler",
     "JakkannaSCAIL2SingleSubjectMask": "Jakkanna SCAIL-2 Validate Subject Mask",
     "JakkannaSCAIL2ReferencePNG16Save": "Jakkanna SCAIL-2 Save 16-bit Reference",
     "JakkannaSCAIL2TrackValidate": "Jakkanna SCAIL-2 Validate Track",

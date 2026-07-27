@@ -1,7 +1,7 @@
 [project]
 name = "jakkanna"
 description = "Visual control and creative tools for ComfyUI: 3D posing, image-and-FBX animation, OpenPose, canvas editing, and model workflows."
-version = "1.4.1"
+version = "1.5.0"
 license = {file = "THIRD_PARTY_NOTICES.md"}
 requires-python = ">=3.10"
 
@@ -62,6 +62,7 @@ NodeIds = [
     "JakkannaSCAIL2ProductionManifest",
     "JakkannaSCAIL2PreparedTrackValidate",
     "JakkannaSCAIL2ReferencePNG16Save",
+    "JakkannaSCAIL2SamplerValidate",
     "JakkannaSCAIL2SingleSubjectMask",
     "JakkannaSCAIL2TrackValidate",
     "JakkannaSCAIL2UpstreamNoise",
