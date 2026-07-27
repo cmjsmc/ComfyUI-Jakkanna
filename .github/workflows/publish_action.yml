@@ -12,10 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMFY_NODE_CHANGELOG: >-
-        Adds a three-input image-and-FBX SCAIL-2 animation workflow with
-        automatic subject fitting, camera registration, short-clip timing,
-        root-motion framing, prepared-track validation, release-safe cache
-        identity, and reproducibility manifests.
+        Adds a four-input image-and-FBX SCAIL-2 workflow with production-safe
+        full, American, medium, close, and Dutch-roll camera presets; binds the
+        selected preset to reference/driver registration, cache identity,
+        validation, and reproducibility manifests.
     steps:
       - name: Check out code
         uses: actions/checkout@v7

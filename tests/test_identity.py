@@ -158,7 +158,9 @@ class IdentityBoundaryTests(unittest.TestCase):
     def test_greenfield_workflow_uses_canonical_release_name(self):
         workflow_dir = os.path.join(ROOT, "workflows")
         canonical = "Jakkanna_Image_FBX_Animate_Greenfield.json"
+        camera_presets = "Jakkanna_Image_FBX_Animate_Camera_Presets.json"
         self.assertTrue(os.path.isfile(os.path.join(workflow_dir, canonical)))
+        self.assertTrue(os.path.isfile(os.path.join(workflow_dir, camera_presets)))
         self.assertFalse(
             os.path.exists(os.path.join(workflow_dir, "Jakkanna Image FBX Animate Greenfield.json"))
         )

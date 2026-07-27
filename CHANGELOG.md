@@ -1,3 +1,20 @@
+# Version 1.4.0
+## Production-Safe Camera Presets
+
+*   Added a four-input Greenfield image/FBX workflow with selectable full,
+    American, medium, close, and fixed Dutch-roll camera presets.
+*   Applied one deterministic camera transform to the registered reference,
+    81-frame driver, and driving masks without exposing mannequin or camera
+    tuning controls.
+*   Bound camera selection to preprocessing cache identity and production
+    provenance, and rejected silent preset substitution or expanded crop
+    permissions.
+*   Allowed intentional bottom and peripheral side continuation for cropped
+    shots while retaining top/head canvas-clearance validation.
+*   Kept the existing Greenfield workflow and preparation node compatible;
+    omitted single-image camera angles that require unreliable novel-view
+    synthesis.
+
 # Version 1.3.0
 ## State-Bound Animation Capture and Production Provenance
 

@@ -15,11 +15,99 @@ sys.path.insert(0, str(TOOLS))
 
 import audit_fbx
 import build_driver
+import camera_presets
+import make_camera_preset_workflow
 import make_greenfield_workflow
 import make_workflow
+import render
 import run_all
 import workflow_builder
 from _env import package_version, release_identity, safe_name
+
+
+class CameraPresetTests(unittest.TestCase):
+    def test_presets_are_stable_and_explicit(self):
+        self.assertEqual(
+            camera_presets.CAMERA_PRESETS,
+            (
+                "Auto Director",
+                "Classic Full Shot",
+                "American / Cowboy Shot",
+                "Medium Shot",
+                "Medium Close-Up",
+                "Classic Close-Up",
+                "Dutch Left (10°)",
+                "Dutch Right (10°)",
+            ),
+        )
+        self.assertEqual(
+            camera_presets.camera_preset_spec("Medium Shot")["allowed_border_clipping"],
+            ("bottom", "left", "right"),
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported camera preset"):
+            camera_presets.camera_preset_spec("Bird's-eye View")
+
+    def test_shot_rays_selects_the_upper_region_per_frame(self):
+        frames = [
+            np.array([[-2.0, -4.0], [0.0, -4.0], [2.0, -4.0],
+                      [-2.0, 6.0], [2.0, 6.0]]),
+            np.array([[-3.0, -2.0], [0.0, -2.0], [3.0, -2.0],
+                      [-3.0, 8.0], [3.0, 8.0]]),
+        ]
+
+        rays = build_driver.shot_rays(frames, 0.5)
+
+        self.assertEqual(rays.shape, (10, 2))
+        np.testing.assert_array_equal(rays[:5, 1], [-4.0, -4.0, -4.0, 1.0, 1.0])
+        np.testing.assert_array_equal(rays[5:, 1], [-2.0, -2.0, -2.0, 3.0, 3.0])
+        self.assertGreater(
+            build_driver.minimum_safe_focal(704, 1280, 0.5),
+            build_driver.minimum_safe_focal(704, 1280, 1.0),
+        )
+
+    def test_cropped_camera_honours_the_vertical_shot_line(self):
+        rays = np.array([
+            [-2.0, -0.5],
+            [2.0, -0.5],
+            [-0.25, 0.5],
+            [0.25, 0.5],
+        ])
+
+        focal, principal = build_driver.fit_cropped_camera(rays, 704, 1280, 0.08)
+        projected_y = rays[:, 1] * focal + principal[1]
+
+        self.assertAlmostEqual(projected_y.min(), 1280 * 0.08)
+        self.assertAlmostEqual(projected_y.max(), 1280 * 0.92)
+        self.assertGreater(focal * (rays[:, 0].max() - rays[:, 0].min()), 704)
+
+    def test_roll_is_identical_for_geometry_and_reference_reprojection(self):
+        fit = type("Fit", (), {"image_size": (100, 80), "focal_length": 100.0})()
+        principal = (60.0, 70.0)
+        point = np.array([[10.0, -20.0, -100.0]])
+        projected, _depth = render.project(
+            point,
+            np.zeros(3),
+            100.0,
+            200,
+            200,
+            principal,
+            10.0,
+        )
+
+        with mock.patch.object(cv2, "warpAffine", return_value=np.zeros((200, 200, 3))) as warp:
+            build_driver.reproject_reference(
+                np.zeros((80, 100, 3), dtype=np.uint8),
+                fit,
+                100.0,
+                principal,
+                200,
+                200,
+                10.0,
+            )
+        matrix = warp.call_args.args[1]
+        reference_pixel = np.array([60.0, 60.0, 1.0])
+
+        np.testing.assert_allclose(matrix @ reference_pixel, projected[0], atol=1e-12)
 
 
 class RunIdentityTests(unittest.TestCase):
@@ -41,6 +129,15 @@ class RunIdentityTests(unittest.TestCase):
                 "image",
                 "fbx",
                 {**settings, "root_motion": "in_place"},
+                "1.3.0+commit",
+            ),
+        )
+        self.assertNotEqual(
+            baseline,
+            run_all.run_identity(
+                "image",
+                "fbx",
+                {**settings, "camera_preset": "Medium Shot"},
                 "1.3.0+commit",
             ),
         )
@@ -263,6 +360,28 @@ class GreenfieldWorkflowTests(unittest.TestCase):
         self.assertEqual(self.graph["C1"][1]["length"], ["V3", 2])
         self.assertEqual(self.graph["C1"][1]["pose_video"], ["F1", 0])
         self.assertEqual(self.graph["C1"][1]["pose_video_mask"], ["F1", 1])
+
+    def test_camera_preset_workflow_exposes_the_fourth_control(self):
+        graph = make_camera_preset_workflow.camera_preset_workflow(
+            "ref_pic/luc.jpg",
+            "dance.fbx",
+            "American / Cowboy Shot",
+            "preserve the subject",
+            42,
+        )
+
+        self.assertEqual(
+            make_camera_preset_workflow.VISIBLE,
+            {"I1", "F1", "P1"},
+        )
+        self.assertEqual(
+            graph["F1"][1]["camera_preset"],
+            "American / Cowboy Shot",
+        )
+        self.assertEqual(
+            make_camera_preset_workflow.TITLES["P1"],
+            "4 · Customization prompt",
+        )
 
 
 if __name__ == "__main__":

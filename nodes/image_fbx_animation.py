@@ -13,6 +13,8 @@ import torch
 import comfy.model_management
 import folder_paths
 
+from ..camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS, camera_preset_spec
+
 
 _JAKKANNA_ROOT = Path(__file__).resolve().parents[1]
 _RUN_ALL = _JAKKANNA_ROOT / "tools" / "scail2_animate" / "run_all.py"
@@ -162,6 +164,9 @@ class JakkannaImageFBXPrepare:
             "required": {
                 "image": ("IMAGE",),
                 "fbx_file": (files or ["No FBX files found under input/animate"],),
+            },
+            "optional": {
+                "camera_preset": (list(CAMERA_PRESETS), {"default": AUTO_CAMERA_PRESET}),
             }
         }
 
@@ -175,25 +180,27 @@ class JakkannaImageFBXPrepare:
     )
 
     @classmethod
-    def VALIDATE_INPUTS(cls, image, fbx_file):
+    def VALIDATE_INPUTS(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
         try:
             _resolve_fbx(fbx_file)
+            camera_preset_spec(camera_preset)
         except ValueError as error:
             return str(error)
         return True
 
     @classmethod
-    def IS_CHANGED(cls, image, fbx_file):
+    def IS_CHANGED(cls, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
         try:
-            return _file_sha256(_resolve_fbx(fbx_file))
+            return f"{_file_sha256(_resolve_fbx(fbx_file))}:{camera_preset}"
         except (OSError, ValueError):
             return float("nan")
 
-    def prepare(self, image, fbx_file):
+    def prepare(self, image, fbx_file, camera_preset=AUTO_CAMERA_PRESET):
         if not torch.cuda.is_available():
             raise RuntimeError(
                 "Jakkanna image + FBX preparation requires an NVIDIA CUDA GPU"
             )
+        camera_preset_spec(camera_preset)
         source_path, source_metadata = _write_source_image(image)
         fbx_path = _resolve_fbx(fbx_file)
         run_name = f"greenfield-{source_metadata['normalized_rgb8_sha256'][:12]}-{fbx_path.stem}"
@@ -211,6 +218,7 @@ class JakkannaImageFBXPrepare:
             "--name", run_name,
             "--timing", "auto",
             "--root-motion", "auto",
+            "--camera-preset", camera_preset,
             "--skip-verify",
             "--result-file", str(result_path),
         ]
@@ -256,6 +264,7 @@ class JakkannaImageFBXPrepare:
             **source_metadata,
             "fbx_file": fbx_path.relative_to(_animation_root().resolve()).as_posix(),
             "fbx_sha256": _file_sha256(fbx_path),
+            "camera_preset": camera_preset,
         }
 
         frames = report.get("settings", {}).get("frames")

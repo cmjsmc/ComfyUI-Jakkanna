@@ -23,13 +23,10 @@ FACE_ID_BITS = 20
 
 def project(vertices: np.ndarray, cam_t: np.ndarray, focal: float,
             width: int, height: int,
-            principal: tuple[float, float] | None = None) -> tuple[np.ndarray, np.ndarray]:
+            principal: tuple[float, float] | None = None,
+            roll_degrees: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
     """World-space metres -> (pixels, depth). Mirrors SAM 3D Body's viewer."""
-    verts = np.asarray(vertices, dtype=np.float64).copy()
-    verts[:, 1] *= -1.0
-    verts[:, 2] *= -1.0
-    verts += np.asarray(cam_t, dtype=np.float64).reshape(1, 3)
-
+    verts = camera_space(vertices, cam_t, roll_degrees)
     cx, cy = principal if principal is not None else (width * 0.5, height * 0.5)
     z = np.maximum(verts[:, 2], 1e-4)
     u = verts[:, 0] * focal / z + cx
@@ -37,11 +34,17 @@ def project(vertices: np.ndarray, cam_t: np.ndarray, focal: float,
     return np.stack([u, v], axis=1), verts[:, 2]
 
 
-def camera_space(vertices: np.ndarray, cam_t: np.ndarray) -> np.ndarray:
+def camera_space(vertices: np.ndarray, cam_t: np.ndarray,
+                 roll_degrees: float = 0.0) -> np.ndarray:
     verts = np.asarray(vertices, dtype=np.float64).copy()
     verts[:, 1] *= -1.0
     verts[:, 2] *= -1.0
-    return verts + np.asarray(cam_t, dtype=np.float64).reshape(1, 3)
+    verts += np.asarray(cam_t, dtype=np.float64).reshape(1, 3)
+    if roll_degrees:
+        angle = np.deg2rad(roll_degrees)
+        cos, sin = np.cos(angle), np.sin(angle)
+        verts[:, :2] = verts[:, :2] @ np.array([[cos, sin], [-sin, cos]])
+    return verts
 
 
 class Rasteriser:

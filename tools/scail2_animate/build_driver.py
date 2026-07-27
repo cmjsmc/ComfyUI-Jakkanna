@@ -23,6 +23,7 @@ from _env import COMFY_ROOT, bootstrap, file_sha256, package_version, release_id
 
 bootstrap()
 
+from jakkanna_pack.camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS, camera_preset_spec
 from fbx import FbxClip
 from mhr_rig import MhrRig
 from render import Rasteriser, camera_space, project
@@ -55,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--framing", choices=("full_body", "reference_crop"), default="full_body",
                         help="full_body pulls the camera back so the whole clip fits the canvas; "
                              "reference_crop keeps the photograph's own framing")
+    parser.add_argument("--camera-preset", choices=CAMERA_PRESETS, default=AUTO_CAMERA_PRESET)
     parser.add_argument("--margin", type=float, default=0.06,
                         help="fraction of the canvas kept clear around the body (full_body only)")
     parser.add_argument("--ease-frames", type=int, default=12,
@@ -133,9 +135,53 @@ def fit_body_camera(rays: np.ndarray, width: int, height: int,
     return focal, (cx, cy)
 
 
+def fit_cropped_camera(rays: np.ndarray, width: int, height: int,
+                       margin: float) -> tuple[float, tuple[float, float]]:
+    """Frame the selected vertical shot line, allowing peripheral side crop."""
+    x_lo, y_lo = rays.min(axis=0)
+    x_hi, y_hi = rays.max(axis=0)
+    focal = (height * (1 - 2 * margin)) / max(y_hi - y_lo, 1e-9)
+    cx = width * 0.5 - focal * (x_lo + x_hi) * 0.5
+    cy = height * 0.5 - focal * (y_lo + y_hi) * 0.5
+    return focal, (cx, cy)
+
+
+def fit_preset_camera(rays: np.ndarray, width: int, height: int,
+                      margin: float, vertical_fraction: float
+                      ) -> tuple[float, tuple[float, float]]:
+    if vertical_fraction < 1:
+        return fit_cropped_camera(rays, width, height, margin)
+    return fit_body_camera(rays, width, height, margin)
+
+
+def shot_rays(frame_rays: list[np.ndarray], vertical_fraction: float) -> np.ndarray:
+    if not 0 < vertical_fraction <= 1:
+        raise ValueError("camera preset vertical fraction must be in (0, 1]")
+    if vertical_fraction == 1:
+        return np.concatenate(frame_rays, axis=0)
+
+    selected = []
+    for rays in frame_rays:
+        y_lo = float(rays[:, 1].min())
+        y_hi = float(rays[:, 1].max())
+        cutoff = y_lo + (y_hi - y_lo) * vertical_fraction
+        region = rays[rays[:, 1] <= cutoff]
+        if region.shape[0] < 3:
+            raise ValueError("camera preset could not resolve a stable upper-body crop")
+        x_lo = float(region[:, 0].min())
+        x_hi = float(region[:, 0].max())
+        selected.append(np.vstack((region, [[x_lo, cutoff], [x_hi, cutoff]])))
+    return np.concatenate(selected, axis=0)
+
+
+def minimum_safe_focal(width: int, height: int, vertical_fraction: float) -> float:
+    return min(width, height) * 0.75 / vertical_fraction
+
+
 def reproject_reference(photo: np.ndarray, fit, focal: float,
                         principal: tuple[float, float],
-                        width: int, height: int) -> np.ndarray:
+                        width: int, height: int,
+                        roll_degrees: float = 0.0) -> np.ndarray:
     """Map the reference photograph into a virtual camera that shares its centre.
 
     u' = (f'/f) * (u - cx) + cx', which is an affine warp, so the subject stays
@@ -143,9 +189,13 @@ def reproject_reference(photo: np.ndarray, fit, focal: float,
     """
     ref_w, ref_h = fit.image_size
     scale = focal / fit.focal_length
+    angle = np.deg2rad(roll_degrees)
+    cos, sin = np.cos(angle), np.sin(angle)
+    transform = scale * np.array([[cos, -sin], [sin, cos]], dtype=np.float64)
+    offset = np.asarray(principal) - transform @ np.array([ref_w * 0.5, ref_h * 0.5])
     matrix = np.array([
-        [scale, 0.0, principal[0] - scale * ref_w * 0.5],
-        [0.0, scale, principal[1] - scale * ref_h * 0.5],
+        [transform[0, 0], transform[0, 1], offset[0]],
+        [transform[1, 0], transform[1, 1], offset[1]],
     ], dtype=np.float64)
     interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LANCZOS4
     return cv2.warpAffine(photo, matrix, (width, height), flags=interp,
@@ -156,6 +206,10 @@ def main() -> None:
     args = parse_args()
     version = args.jakkanna_version or package_version()
     identity = args.jakkanna_release_identity or release_identity()
+    preset = camera_preset_spec(args.camera_preset)
+    camera_margin = args.margin if preset["margin"] is None else preset["margin"]
+    roll_degrees = preset["roll_degrees"]
+    vertical_fraction = preset["vertical_fraction"]
     run_id = args.run_id or args.run_dir.name
     if not args.image.is_file():
         raise FileNotFoundError(f"reference image does not exist: {args.image}")
@@ -217,33 +271,43 @@ def main() -> None:
             )
             verts = rig.vertices(params, fit)
             posed_frames.append(verts)
-            cam = camera_space(verts, fit.cam_t)
+            cam = camera_space(verts, fit.cam_t, roll_degrees)
             frame_rays.append(cam[:, :2] / np.maximum(cam[:, 2:3], 1e-4))
-        return posed_frames, np.concatenate(frame_rays, axis=0)
+        return posed_frames, frame_rays
 
     # Pose every frame first: the full-body camera has to see the whole clip
     # before it can choose a focal length that keeps the body inside the canvas.
     follow_root = args.root_motion != "in_place"
-    posed, rays = pose_frames(follow_root)
+    posed, frame_rays = pose_frames(follow_root)
+    rays = shot_rays(frame_rays, vertical_fraction)
     resolved_root_motion = "preserve" if follow_root else "in_place"
     preserved_focal = None
     if args.framing == "full_body" and args.root_motion == "auto":
-        preserved_focal, _ = fit_body_camera(rays, args.width, args.height, args.margin)
-        minimum_safe_focal = min(args.width, args.height) * 0.75
-        if not np.isfinite(preserved_focal) or preserved_focal < minimum_safe_focal:
-            posed, rays = pose_frames(False)
+        preserved_focal, _ = fit_preset_camera(
+            rays, args.width, args.height, camera_margin, vertical_fraction
+        )
+        safe_focal = minimum_safe_focal(args.width, args.height, vertical_fraction)
+        if not np.isfinite(preserved_focal) or preserved_focal < safe_focal:
+            posed, frame_rays = pose_frames(False)
+            rays = shot_rays(frame_rays, vertical_fraction)
             resolved_root_motion = "in_place"
             print(
                 f"[driver] root motion changed to in-place: preserved motion requires "
-                f"focal={preserved_focal:.2f}, below the safe framing floor {minimum_safe_focal:.2f}"
+                f"focal={preserved_focal:.2f}, below the safe framing floor {safe_focal:.2f}"
             )
 
     if args.framing == "full_body":
-        focal, principal = fit_body_camera(rays, args.width, args.height, args.margin)
+        focal, principal = fit_preset_camera(
+            rays, args.width, args.height, camera_margin, vertical_fraction
+        )
     else:
+        if args.camera_preset != AUTO_CAMERA_PRESET:
+            raise ValueError("camera presets require full_body framing")
         focal, principal = reference_crop_camera(fit, args.width, args.height)
+    if not np.isfinite(focal) or focal <= 0:
+        raise ValueError(f"camera preset {args.camera_preset!r} produced an invalid focal length")
     print(f"[driver] reference {fit.image_size} focal={fit.focal_length:.1f} -> "
-          f"{args.framing} {args.width}x{args.height} focal={focal:.2f} "
+          f"{args.camera_preset} {args.width}x{args.height} focal={focal:.2f} "
           f"principal=({principal[0]:.1f}, {principal[1]:.1f})")
 
     raster = Rasteriser(rig.faces, device=rig.device, supersample=args.supersample)
@@ -251,8 +315,10 @@ def main() -> None:
     preview_frames = []
     for index, verts in enumerate(posed):
         time = times[index]
-        pts, depth = project(verts, fit.cam_t, focal, args.width, args.height, principal)
-        rgb, mask = raster.shade(camera_space(verts, fit.cam_t), pts, depth,
+        pts, depth = project(
+            verts, fit.cam_t, focal, args.width, args.height, principal, roll_degrees
+        )
+        rgb, mask = raster.shade(camera_space(verts, fit.cam_t, roll_degrees), pts, depth,
                                  args.width, args.height)
 
         write_image(pose_dir / f"frame_{index:04d}.png", rgb[..., ::-1])
@@ -282,7 +348,9 @@ def main() -> None:
     photo = cv2.imread(str(args.image), cv2.IMREAD_COLOR)
     if photo is None:
         raise FileNotFoundError(f"could not read {args.image}")
-    reference = reproject_reference(photo, fit, focal, principal, args.width, args.height)
+    reference = reproject_reference(
+        photo, fit, focal, principal, args.width, args.height, roll_degrees
+    )
     reference_path = args.run_dir / "registered_reference.png"
     write_image(reference_path, reference)
 
@@ -299,7 +367,8 @@ def main() -> None:
 
     subject_mask, _ = auto_mask_bgr(photo)
     subject_sil = reproject_reference((subject_mask > 0.5).astype(np.uint8) * 255,
-                                      fit, focal, principal, args.width, args.height) > 127
+                                      fit, focal, principal, args.width, args.height,
+                                      roll_degrees) > 127
     if subject_sil.ndim == 3:
         subject_sil = subject_sil[..., 0]
     driver_sil = cv2.imread(str(pose_dir / "frame_0000.png"), cv2.IMREAD_GRAYSCALE) > 24
@@ -332,7 +401,8 @@ def main() -> None:
             "width": args.width,
             "height": args.height,
             "framing": args.framing,
-            "margin": args.margin,
+            "camera_preset": args.camera_preset,
+            "margin": camera_margin,
             "ease_frames": args.ease_frames,
             "root_motion": args.root_motion,
             "supersample": args.supersample,
@@ -352,6 +422,13 @@ def main() -> None:
             "frame0_subject_iou": iou,
             "frame0_subject_iou_visible": iou_visible,
             "preserved_root_motion_focal": preserved_focal,
+            "camera_preset": {
+                "requested": args.camera_preset,
+                "resolved": args.camera_preset,
+                "vertical_fraction": vertical_fraction,
+                "roll_degrees": roll_degrees,
+                "allowed_border_clipping": list(preset["allowed_border_clipping"]),
+            },
         },
         "artifacts": {
             "fit": {

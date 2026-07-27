@@ -110,11 +110,12 @@
       "properties": {
         "Node name for S&R": "JakkannaImageFBXPrepare",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
-        "dance.fbx"
+        "dance.fbx",
+        "Auto Director"
       ],
       "title": "2 \u00b7 FBX animation"
     },
@@ -395,7 +396,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -696,7 +697,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ReferencePNG16Save",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -824,7 +825,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionInputValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [],
@@ -908,7 +909,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2PreparedTrackValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1637,7 +1638,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2UpstreamNoise",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2036,7 +2037,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionManifest",
         "cnr_id": "jakkanna",
-        "ver": "1.3.0",
+        "ver": "1.4.0",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [

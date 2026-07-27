@@ -16,11 +16,16 @@ from _env import (
     COMFY_ROOT,
     INPUT_ROOT,
     RUN_ROOT,
+    bootstrap,
     file_sha256,
     package_version,
     release_identity,
     safe_name,
 )
+
+bootstrap()
+
+from jakkanna_pack.camera_presets import AUTO_CAMERA_PRESET, CAMERA_PRESETS
 
 
 HERE = Path(__file__).resolve().parent
@@ -46,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", type=float, default=0.0)
     parser.add_argument("--timing", choices=("original_speed", "auto", "fit_clip"), default="original_speed")
     parser.add_argument("--framing", choices=("full_body", "reference_crop"), default="full_body")
+    parser.add_argument("--camera-preset", choices=CAMERA_PRESETS, default=AUTO_CAMERA_PRESET)
     parser.add_argument("--margin", type=float, default=0.06)
     parser.add_argument("--ease-frames", type=int, default=12)
     parser.add_argument("--root-motion", choices=("preserve", "in_place", "auto"), default="preserve")
@@ -124,6 +130,7 @@ def main() -> None:
         "width": args.width,
         "height": args.height,
         "framing": args.framing,
+        "camera_preset": args.camera_preset,
         "margin": args.margin,
         "ease_frames": args.ease_frames,
         "root_motion": args.root_motion,
@@ -196,6 +203,7 @@ def main() -> None:
         "--start", str(args.start),
         "--timing", args.timing,
         "--framing", args.framing,
+        "--camera-preset", args.camera_preset,
         "--margin", str(args.margin),
         "--ease-frames", str(args.ease_frames),
         "--root-motion", args.root_motion,
