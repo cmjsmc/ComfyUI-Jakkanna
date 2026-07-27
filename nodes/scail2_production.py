@@ -16,6 +16,7 @@ import comfy.samplers
 import folder_paths
 from comfy.ldm.sam3.tracker import unpack_masks
 
+from ..camera_presets import AUTO_CAMERA_PRESET, camera_preset_spec
 from .pose_studio import _execution_state_signature
 from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
@@ -460,6 +461,7 @@ def _track_metrics(masks):
         "maximum_adjacent_area_ratio": float((larger / smaller).max().item()),
         "maximum_centroid_jump": float(torch.sqrt(dx.square() + dy.square()).max().item()),
         "minimum_adjacent_iou": float((intersections / unions).min().item()),
+        "border_margins": border_margins,
         "frame_border_margin": border_margins.min(dim=1).values,
     }
 
@@ -471,13 +473,21 @@ def _validate_track_metrics(
     maximum_centroid_jump,
     minimum_adjacent_iou,
     minimum_border_margin,
+    allowed_border_clipping=(),
 ):
     if metrics["empty_frames"]:
         raise ValueError(f"{source} track is empty on frames {metrics['empty_frames']}")
     max_area_step = metrics["maximum_adjacent_area_ratio"]
     max_jump = metrics["maximum_centroid_jump"]
     min_iou = metrics["minimum_adjacent_iou"]
-    frame_border_margin = metrics["frame_border_margin"]
+    edge_names = ("top", "bottom", "left", "right")
+    checked_edges = [
+        index for index, name in enumerate(edge_names)
+        if name not in allowed_border_clipping
+    ]
+    if not checked_edges:
+        raise ValueError(f"{source} track must validate at least one canvas edge")
+    frame_border_margin = metrics["border_margins"][:, checked_edges].min(dim=1).values
     min_border = float(frame_border_margin.min().item())
     if max_area_step > maximum_area_step_ratio:
         raise ValueError(
@@ -661,6 +671,27 @@ class JakkannaSCAIL2PreparedTrackValidate:
         if (red_green != 0).any() or not (((blue == 0) | (blue == 1)).all()):
             raise ValueError("Prepared driving masks must contain only black and RGB blue")
         masks = blue.bool()
+        try:
+            prepared = json.loads(preprocess_report)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Prepared input report is not valid JSON") from error
+        if prepared.get("schema") != "jakkanna.image_fbx_animation.v1":
+            raise ValueError("Prepared input report has an unsupported schema")
+        preset_report = prepared.get("registration", {}).get("camera_preset", {})
+        requested_preset = preset_report.get("requested", AUTO_CAMERA_PRESET)
+        preset = camera_preset_spec(requested_preset)
+        allowed_border_clipping = tuple(
+            preset_report.get("allowed_border_clipping", ())
+        )
+        if allowed_border_clipping != preset["allowed_border_clipping"]:
+            raise ValueError(
+                f"Prepared camera preset {requested_preset!r} has invalid border-clipping provenance"
+            )
+        if preset_report and preset_report.get("resolved") != requested_preset:
+            raise ValueError("Prepared camera preset was silently replaced")
+        if prepared.get("settings", {}).get("camera_preset", AUTO_CAMERA_PRESET) != requested_preset:
+            raise ValueError("Prepared camera preset settings do not match registration provenance")
+
         metrics = _track_metrics(masks)
         areas = metrics["areas"]
         max_area_step, max_jump, min_iou, min_border = _validate_track_metrics(
@@ -670,14 +701,9 @@ class JakkannaSCAIL2PreparedTrackValidate:
             maximum_centroid_jump,
             minimum_adjacent_iou,
             minimum_border_margin,
+            allowed_border_clipping,
         )
 
-        try:
-            prepared = json.loads(preprocess_report)
-        except (TypeError, ValueError) as error:
-            raise ValueError("Prepared input report is not valid JSON") from error
-        if prepared.get("schema") != "jakkanna.image_fbx_animation.v1":
-            raise ValueError("Prepared input report has an unsupported schema")
         visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
         if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_PREPARED_VISIBLE_IOU:
             raise ValueError(
@@ -729,6 +755,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "maximum_centroid_jump": max_jump,
             "minimum_adjacent_iou": min_iou,
             "minimum_border_margin": min_border,
+            "allowed_border_clipping": list(allowed_border_clipping),
             "track_mask_sha256": _hash_tensor(masks, binary=True),
             "source_rgb16_sha256": source_hash,
             "driving_mask_rgb16_sha256": mask_hash,

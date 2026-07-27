@@ -174,6 +174,13 @@ and customization prompt. Its preparation, retargeting, framing, validation,
 sampling, and manifests run automatically. The current animation-directory
 compatibility results are recorded in
 [the FBX input audit](docs/FBX_INPUT_AUDIT.md).
+The sibling
+[Camera Presets workflow](workflows/Jakkanna_Image_FBX_Animate_Camera_Presets.json)
+adds a fourth control with deterministic full, American, medium, close, and
+Dutch-roll shot choices. It retains a fixed camera across the clip and applies
+the same transform to the photograph, driver, and masks. Camera angles that
+would reveal an unseen side of the subject are excluded because they require
+novel-view reconstruction from a single image.
 This workflow requires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model
 files listed in the image/FBX guide, and ComfyUI-VideoHelperSuite 1.7.9 or
 newer.

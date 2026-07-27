@@ -30,6 +30,27 @@ Describe any important clothing, footwear, or anatomy that is hidden or outside
 the photograph. Those details cannot be recovered from pixels that are not
 present.
 
+The sibling
+[`Jakkanna_Image_FBX_Animate_Camera_Presets.json`](../workflows/Jakkanna_Image_FBX_Animate_Camera_Presets.json)
+adds one intended control: a production-safe camera preset. The choices are:
+
+- **Auto Director** and **Classic Full Shot** for complete-body framing;
+- **American / Cowboy Shot**, **Medium Shot**, **Medium Close-Up**, and
+  **Classic Close-Up** for progressively tighter optical framing; and
+- **Dutch Left (10°)** and **Dutch Right (10°)** for a fixed optical-axis roll.
+
+All presets use one fixed camera for the full clip and apply the same transform
+to the registered photograph, rendered driver, and masks. Cropped presets may
+intentionally continue below the bottom edge; top and side canvas-clearance
+checks remain mandatory. An explicit selection is recorded in cache identity
+and provenance and is never silently replaced.
+
+High angle, low angle, profile, bird's-eye, worm's-eye,
+over-the-shoulder, and point-of-view presets are intentionally omitted. A
+single photograph does not contain the unseen appearance needed to synthesize
+those views reliably. Supporting them correctly requires a separate
+novel-view reconstruction or synthesis stage.
+
 ## Installation requirements
 
 - ComfyUI 0.27.0 or newer.
@@ -93,12 +114,13 @@ cd ~/Code/ComfyUI/custom_nodes/ComfyUI-Jakkanna
   --image ~/Code/ComfyUI/input/ref_pic/luc.jpg \
   --fbx ~/Code/ComfyUI/input/animate/dance.fbx \
   --name luc-dance \
-  --root-motion preserve
+  --root-motion preserve \
+  --camera-preset "American / Cowboy Shot"
 ```
 
-The run identity covers the image and FBX hashes, camera/render settings, root
-motion, Jakkanna package version, and the Git commit when installed from a
-source checkout. Outputs are isolated under:
+The run identity covers the image and FBX hashes, selected camera preset,
+camera/render settings, root motion, Jakkanna package version, and the Git
+commit when installed from a source checkout. Outputs are isolated under:
 
 ```text
 ComfyUI/input/jakkanna_animate/<name>-<identity>/
@@ -124,7 +146,9 @@ repairing geometry.
 `full_body` framing keeps the complete clip inside the canvas. Use
 `--framing reference_crop` when retaining the photograph's crop matters more
 than showing motion outside it. The default root-motion policy is `preserve`;
-select `in_place` only for intentionally stationary motion.
+select `in_place` only for intentionally stationary motion. Explicit camera
+presets require `full_body` because their crop and clearance contract is
+defined by the fitted body geometry.
 
 ## Generate the workflow
 
@@ -166,7 +190,7 @@ for the model to synthesize.
 `preprocess_manifest.json` contains:
 
 - input image and FBX SHA-256 hashes;
-- frame, FPS, canvas, framing, ease, and root-motion settings;
+- frame, FPS, canvas, framing, camera-preset, ease, and root-motion settings;
 - camera and registration measurements;
 - every generated file hash;
 - canonical RGB16 hashes for the driver, mask batch, and registered reference;

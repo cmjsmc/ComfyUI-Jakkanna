@@ -211,6 +211,21 @@ class PreparedTrackValidationTests(unittest.TestCase):
         }
         return source, driving_masks, registered_reference, reference_mask, json.dumps(report)
 
+    def _set_camera_preset(self, driving_masks, report_json, preset, allowed_edges):
+        report = json.loads(report_json)
+        report["settings"]["camera_preset"] = preset
+        report["registration"]["camera_preset"] = {
+            "requested": preset,
+            "resolved": preset,
+            "vertical_fraction": 0.58,
+            "roll_degrees": 0.0,
+            "allowed_border_clipping": allowed_edges,
+        }
+        report["artifacts"]["driving_mask"]["rgb16_sha256"] = (
+            scail2_production._hash_tensor(driving_masks)
+        )
+        return json.dumps(report)
+
     def test_validates_exact_prepared_palette_and_provenance(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()
         initial_json, track_json, frames = scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
@@ -284,6 +299,76 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 reference_mask,
                 3,
                 json.dumps(report),
+                2.0,
+                0.15,
+                0.1,
+                0.01,
+            )
+
+    def test_medium_shot_allows_only_declared_bottom_clipping(self):
+        source, driving_masks, registered_reference, reference_mask, report = self._inputs()
+        driving_masks.zero_()
+        driving_masks[:, 4:24, 4:20, 2] = 1
+        report = self._set_camera_preset(
+            driving_masks, report, "Medium Shot", ["bottom"]
+        )
+
+        _initial, track_json, _frames = (
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source,
+                driving_masks,
+                registered_reference,
+                reference_mask,
+                3,
+                report,
+                2.0,
+                0.15,
+                0.1,
+                0.01,
+            )
+        )
+
+        self.assertEqual(
+            json.loads(track_json)["allowed_border_clipping"],
+            ["bottom"],
+        )
+
+    def test_medium_shot_still_rejects_side_clipping(self):
+        source, driving_masks, registered_reference, reference_mask, report = self._inputs()
+        driving_masks.zero_()
+        driving_masks[:, 4:24, 0:20, 2] = 1
+        report = self._set_camera_preset(
+            driving_masks, report, "Medium Shot", ["bottom"]
+        )
+
+        with self.assertRaisesRegex(ValueError, "canvas edge"):
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source,
+                driving_masks,
+                registered_reference,
+                reference_mask,
+                3,
+                report,
+                2.0,
+                0.15,
+                0.1,
+                0.01,
+            )
+
+    def test_rejects_camera_preset_provenance_that_expands_crop_edges(self):
+        source, driving_masks, registered_reference, reference_mask, report = self._inputs()
+        report = self._set_camera_preset(
+            driving_masks, report, "Medium Shot", ["bottom", "left"]
+        )
+
+        with self.assertRaisesRegex(ValueError, "invalid border-clipping provenance"):
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source,
+                driving_masks,
+                registered_reference,
+                reference_mask,
+                3,
+                report,
                 2.0,
                 0.15,
                 0.1,

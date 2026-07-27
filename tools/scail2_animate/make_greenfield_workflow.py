@@ -45,6 +45,7 @@ def greenfield_workflow(
     fbx_file: str = "dance.fbx",
     prompt: str = DEFAULT_PROMPT,
     seed: int = 260724,
+    camera_preset: str | None = None,
 ) -> dict:
     graph = make_workflow.workflow(
         "unused",
@@ -73,12 +74,16 @@ def greenfield_workflow(
                 source, slot = replacements[value[0]]
                 inputs[name] = [source, slot]
 
+    prepare_inputs = {
+        "image": ["I1", 0],
+        "fbx_file": fbx_file,
+    }
+    if camera_preset is not None:
+        prepare_inputs["camera_preset"] = camera_preset
+
     return {
         "I1": ("LoadImage", {"image": image}),
-        "F1": ("JakkannaImageFBXPrepare", {
-            "image": ["I1", 0],
-            "fbx_file": fbx_file,
-        }),
+        "F1": ("JakkannaImageFBXPrepare", prepare_inputs),
         **graph,
     }
 
