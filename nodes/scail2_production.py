@@ -1,13 +1,12 @@
 from datetime import datetime, timezone
 from fractions import Fraction
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
-import av
 import cv2
 import torch
 
@@ -17,10 +16,12 @@ import comfy.samplers
 import folder_paths
 from comfy.ldm.sam3.tracker import unpack_masks
 
+from .pose_studio import _execution_state_signature
 from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
 
 UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
+_MINIMUM_PREPARED_VISIBLE_IOU = 0.65
 
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
@@ -78,20 +79,6 @@ def _hash_file_cached(path):
     return digest
 
 
-def _hash_stream(source):
-    if isinstance(source, (str, os.PathLike)):
-        return _hash_file(source)
-    if not isinstance(source, io.BytesIO):
-        raise TypeError(f"Unsupported video source type: {type(source).__name__}")
-    position = source.tell()
-    source.seek(0)
-    digest = hashlib.sha256()
-    for chunk in iter(lambda: source.read(16 * 1024 * 1024), b""):
-        digest.update(chunk)
-    source.seek(position)
-    return digest.hexdigest()
-
-
 def _hash_tensor(tensor, binary=False):
     digest = hashlib.sha256()
     frames = tensor if tensor.ndim > 3 else tensor.unsqueeze(0)
@@ -109,12 +96,26 @@ def _json(data):
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
-def _comfyui_commit():
-    root = Path(folder_paths.__file__).resolve().parent
+def _git_commit(root):
+    git_path = Path(root) / ".git"
     try:
-        head = (root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+        if git_path.is_file():
+            git_dir = (git_path.parent / git_path.read_text(encoding="utf-8").strip().removeprefix("gitdir: ")).resolve()
+        else:
+            git_dir = git_path
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
         if head.startswith("ref: "):
-            head = (root / ".git" / head[5:]).read_text(encoding="utf-8").strip()
+            ref = head[5:]
+            ref_path = git_dir / ref
+            if ref_path.exists():
+                head = ref_path.read_text(encoding="utf-8").strip()
+            else:
+                for line in (git_dir / "packed-refs").read_text(encoding="utf-8").splitlines():
+                    if line and not line.startswith(("#", "^")):
+                        commit, name = line.split(" ", 1)
+                        if name == ref:
+                            head = commit
+                            break
         if len(head) == 40 and all(character in "0123456789abcdef" for character in head.lower()):
             return head
     except OSError:
@@ -122,8 +123,141 @@ def _comfyui_commit():
     return "unknown"
 
 
+def _package_version(root):
+    match = re.search(
+        r'(?m)^version\s*=\s*"([^"]+)"',
+        (Path(root) / "pyproject.toml").read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise ValueError("Jakkanna package version is missing from pyproject.toml")
+    return match.group(1)
+
+
+def _attention_backend():
+    if comfy.model_management.sage_attention_enabled():
+        return "SageAttention"
+    if comfy.model_management.flash_attention_enabled():
+        return "FlashAttention"
+    if comfy.model_management.xformers_enabled():
+        return "xFormers"
+    if comfy.model_management.pytorch_attention_enabled():
+        return "PyTorch SDPA"
+    return "ComfyUI split/sub-quadratic"
+
+
+_GRAPH_ARTIFACT_INPUTS = {
+    "UNETLoader": (("unet_name", "diffusion_models"),),
+    "LoraLoaderModelOnly": (("lora_name", "loras"),),
+    "CheckpointLoaderSimple": (("ckpt_name", "checkpoints"),),
+    "CLIPLoader": (("clip_name", "text_encoders"),),
+    "DualCLIPLoader": (("clip_name1", "text_encoders"), ("clip_name2", "text_encoders")),
+    "TripleCLIPLoader": (
+        ("clip_name1", "text_encoders"),
+        ("clip_name2", "text_encoders"),
+        ("clip_name3", "text_encoders"),
+    ),
+    "VAELoader": (("vae_name", "vae"),),
+    "CLIPVisionLoader": (("clip_name", "clip_vision"),),
+}
+
+_GRAPH_SETTING_INPUTS = {
+    "KSampler": ("seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"),
+    "BasicScheduler": ("scheduler", "steps", "denoise"),
+    "KSamplerSelect": ("sampler_name",),
+    "JakkannaSCAIL2FlowUniPC": ("steps", "shift"),
+    "CFGGuider": ("cfg",),
+    "WanSCAILToVideo": ("replacement_mode", "pose_strength", "pose_start", "pose_end"),
+    "LoraLoaderModelOnly": ("lora_name", "strength_model"),
+    "CLIPVisionEncode": ("crop",),
+    "SAM3_VideoTrack": ("detection_threshold", "max_objects", "detect_interval"),
+    "JakkannaSCAIL2TrackValidate": (
+        "maximum_area_step_ratio",
+        "maximum_centroid_jump",
+        "minimum_adjacent_iou",
+        "minimum_border_margin",
+    ),
+    "JakkannaSCAIL2PreparedTrackValidate": (
+        "maximum_area_step_ratio",
+        "maximum_centroid_jump",
+        "minimum_adjacent_iou",
+        "minimum_border_margin",
+    ),
+}
+
+
+def _prompt_nodes(prompt, class_type):
+    return [
+        (str(node_id), node)
+        for node_id, node in (prompt or {}).items()
+        if isinstance(node, dict) and node.get("class_type") == class_type
+    ]
+
+
+def _single_prompt_node(prompt, class_type):
+    nodes = _prompt_nodes(prompt, class_type)
+    if len(nodes) != 1:
+        raise ValueError(f"Manifest requires exactly one {class_type} node, got {len(nodes)}")
+    return nodes[0][1]
+
+
+def _is_prompt_link(prompt, value):
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and str(value[0]) in (prompt or {})
+        and isinstance(value[1], int)
+    )
+
+
+def _literal_prompt_input(prompt, node, name):
+    value = node.get("inputs", {}).get(name)
+    return None if _is_prompt_link(prompt, value) else value
+
+
+def _graph_artifacts(prompt, hash_model_files):
+    artifacts = []
+    seen = set()
+    for node_id, node in (prompt or {}).items():
+        for input_name, category in _GRAPH_ARTIFACT_INPUTS.get(node.get("class_type"), ()):
+            name = _literal_prompt_input(prompt, node, input_name)
+            if not isinstance(name, str) or not name or name == "None":
+                continue
+            key = (category, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            path = folder_paths.get_full_path(category, name)
+            if path is None:
+                raise ValueError(f"Could not resolve {category} artifact from node {node_id}: {name}")
+            artifacts.append({
+                "category": category,
+                "name": name,
+                "size_bytes": os.path.getsize(path),
+                "sha256": _hash_file_cached(path) if hash_model_files else None,
+            })
+    return artifacts
+
+
+def _graph_settings(prompt):
+    settings = []
+    for node_id, node in (prompt or {}).items():
+        names = _GRAPH_SETTING_INPUTS.get(node.get("class_type"))
+        if names is None:
+            continue
+        inputs = {
+            name: value
+            for name in names
+            if (value := _literal_prompt_input(prompt, node, name)) is not None
+        }
+        settings.append({
+            "node_id": str(node_id),
+            "class_type": node.get("class_type"),
+            "inputs": inputs,
+        })
+    return sorted(settings, key=lambda item: (item["class_type"], item["node_id"]))
+
+
 class JakkannaSCAIL2ProductionInputValidate:
-    HDR_TRANSFERS = {16, 18}
     CANONICAL_RATE = Fraction(16)
 
     @classmethod
@@ -141,56 +275,29 @@ class JakkannaSCAIL2ProductionInputValidate:
     CATEGORY = "Jakkanna/SCAIL-2"
 
     def validate(self, source_video, reference_image):
-        source = source_video.get_stream_source()
-        if isinstance(source, io.BytesIO):
-            source.seek(0)
-
-        with av.open(source, mode="r") as container:
-            if len(container.streams.video) != 1:
-                raise ValueError(f"Source must contain exactly one video stream, got {len(container.streams.video)}")
-            stream = container.streams.video[0]
-            rate = Fraction(stream.average_rate) if stream.average_rate else None
-            if rate is None:
-                raise ValueError("Source has no detectable frame rate")
-            if rate != self.CANONICAL_RATE:
-                raise ValueError(
-                    f"SCAIL-2 production input must be exactly {self.CANONICAL_RATE} fps — the canonical "
-                    f"training rate; prepare the source at 16 fps before running this workflow — got {rate}"
-                )
-
-            pts = []
-            rotations = set()
-            decoded_hash = hashlib.sha256()
-            color_transfers = set()
-            color_primaries = set()
-            for frame in container.decode(stream):
-                if frame.pts is None:
-                    raise ValueError("Source contains a frame without a presentation timestamp")
-                pts.append(frame.pts)
-                rotations.add(frame.rotation)
-                color_transfers.add(frame.color_trc)
-                color_primaries.add(frame.color_primaries)
-                decoded_hash.update(frame.to_ndarray(format="rgb24").tobytes())
-
-            width, height = stream.width, stream.height
-            time_base = Fraction(stream.time_base)
-            stream_metadata = dict(stream.metadata)
-            pixel_format = stream.codec_context.pix_fmt
-            sample_aspect_ratio = stream.codec_context.sample_aspect_ratio
-
-        if isinstance(source, io.BytesIO):
-            source.seek(0)
-
-        if len(pts) != 81:
-            raise ValueError(f"SCAIL-2 production input must contain exactly 81 frames, got {len(pts)}")
+        components = source_video.get_components()
+        images = components.images
+        if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[-1] < 3:
+            raise ValueError("SCAIL-2 production input must provide an IMAGE tensor batch")
+        rate = Fraction(str(components.frame_rate)).limit_denominator(100000)
+        if rate != self.CANONICAL_RATE:
+            raise ValueError(
+                f"SCAIL-2 production input must be exactly {self.CANONICAL_RATE} fps — the canonical "
+                f"training rate; prepare the source at 16 fps before running this workflow — got {rate}"
+            )
+        frames, height, width = images.shape[:3]
+        if frames != 81:
+            raise ValueError(f"SCAIL-2 production input must contain exactly 81 frames, got {frames}")
         if (width, height) not in {(704, 1280), (1280, 704)}:
             raise ValueError(
                 f"SCAIL-2 production input must be 704x1280 or 1280x704, got {width}x{height}"
             )
-        if any(rotation != 0 for rotation in rotations) or stream_metadata.get("rotate", "0") != "0":
-            raise ValueError("Apply video rotation physically before SCAIL-2; rotation metadata is not accepted")
-        if sample_aspect_ratio is not None and Fraction(sample_aspect_ratio) != 1:
-            raise ValueError(f"Source must use square pixels, got sample aspect ratio {sample_aspect_ratio}")
+        if (
+            not isinstance(reference_image, torch.Tensor)
+            or reference_image.ndim != 4
+            or reference_image.shape[-1] < 3
+        ):
+            raise ValueError("Replacement reference must provide an IMAGE tensor batch")
         if reference_image.shape[0] != 1:
             raise ValueError(f"Replacement reference must contain exactly one image, got {reference_image.shape[0]}")
         if (reference_image.shape[2], reference_image.shape[1]) != (width, height):
@@ -199,40 +306,41 @@ class JakkannaSCAIL2ProductionInputValidate:
                 f"source={width}x{height}, reference={reference_image.shape[2]}x{reference_image.shape[1]}"
             )
 
-        nominal_delta = Fraction(1, 1) / rate
-        deltas = [(pts[i + 1] - pts[i]) * time_base for i in range(len(pts) - 1)]
-        tolerance = max(float(time_base) * 1.1, 1e-6)
-        max_timing_error = max(abs(float(delta - nominal_delta)) for delta in deltas)
-        if max_timing_error > tolerance:
+        minimum = float("inf")
+        maximum = float("-inf")
+        for index, frame in enumerate(images):
+            if not torch.isfinite(frame).all():
+                raise ValueError(f"Source frame {index} contains non-finite values")
+            frame_min, frame_max = torch.aminmax(frame)
+            minimum = min(minimum, float(frame_min.item()))
+            maximum = max(maximum, float(frame_max.item()))
+        if minimum < 0 or maximum > 1:
+            raise ValueError(f"Source IMAGE values must be in [0, 1], got [{minimum:g}, {maximum:g}]")
+        if not torch.isfinite(reference_image).all():
+            raise ValueError("Replacement reference contains non-finite values")
+        reference_min, reference_max = torch.aminmax(reference_image)
+        if reference_min < 0 or reference_max > 1:
             raise ValueError(
-                "Source must be constant-frame-rate: "
-                f"maximum frame-interval error is {max_timing_error:.8f}s"
+                "Replacement reference IMAGE values must be in [0, 1], got "
+                f"[{float(reference_min.item()):g}, {float(reference_max.item()):g}]"
             )
-        if self.HDR_TRANSFERS.intersection(color_transfers):
-            raise ValueError("HDR PQ/HLG source video is not accepted; convert it to SDR BT.709 first")
-
-        color_warning = None
-        if color_transfers == {2} or color_primaries == {2}:
-            color_warning = "Color metadata is unspecified; no HDR transfer was detected"
 
         report = {
-            "source_sha256": _hash_stream(source_video.get_stream_source()),
-            "decoded_rgb8_sha256": decoded_hash.hexdigest(),
+            "source_kind": "image_tensor_batch",
+            "source_rgb16_sha256": _hash_tensor(images[..., :3]),
+            "source_dtype": str(images.dtype),
+            "source_device": str(images.device),
+            "source_value_range": [minimum, maximum],
             "width": width,
             "height": height,
-            "frames": len(pts),
+            "frames": frames,
             "fps": f"{rate.numerator}/{rate.denominator}",
             "canonical_fps_enforced": int(self.CANONICAL_RATE),
-            "duration_seconds": float(len(pts) / rate),
+            "duration_seconds": float(frames / rate),
             "constant_frame_rate": True,
-            "maximum_frame_interval_error_seconds": max_timing_error,
-            "pixel_format": pixel_format,
-            "bit_depth": source_video.get_bit_depth(),
-            "color_transfers": sorted(color_transfers),
-            "color_primaries": sorted(color_primaries),
-            "color_warning": color_warning,
+            "color_metadata": "IMAGE tensors have no container transfer or primaries metadata",
         }
-        return width, height, len(pts), float(rate), _json(report)
+        return width, height, frames, float(rate), _json(report)
 
 
 class JakkannaSCAIL2SingleSubjectMask:
@@ -317,6 +425,84 @@ class JakkannaSCAIL2ReferencePNG16Save:
         return {"ui": {"images": results}, "result": (_json(report),)}
 
 
+def _track_metrics(masks):
+    areas = masks.sum(dim=(-1, -2)).float()
+    if (areas == 0).any():
+        return {"areas": areas, "empty_frames": (areas == 0).nonzero(as_tuple=True)[0].tolist()}
+
+    smaller = torch.minimum(areas[:-1], areas[1:]).clamp(min=1)
+    larger = torch.maximum(areas[:-1], areas[1:])
+    height, width = masks.shape[-2:]
+    grid_y = torch.arange(height, device=masks.device, dtype=torch.float32).view(1, height, 1)
+    grid_x = torch.arange(width, device=masks.device, dtype=torch.float32).view(1, 1, width)
+    centroids_y = (masks * grid_y).sum(dim=(-1, -2)) / areas
+    centroids_x = (masks * grid_x).sum(dim=(-1, -2)) / areas
+    dx = (centroids_x[1:] - centroids_x[:-1]) / width
+    dy = (centroids_y[1:] - centroids_y[:-1]) / height
+
+    intersections = (masks[:-1] & masks[1:]).sum(dim=(-1, -2)).float()
+    unions = (masks[:-1] | masks[1:]).sum(dim=(-1, -2)).float().clamp(min=1)
+    occupied_rows = masks.any(dim=2)
+    occupied_columns = masks.any(dim=1)
+    top = occupied_rows.float().argmax(dim=1)
+    bottom = height - 1 - occupied_rows.flip(1).float().argmax(dim=1)
+    left = occupied_columns.float().argmax(dim=1)
+    right = width - 1 - occupied_columns.flip(1).float().argmax(dim=1)
+    border_margins = torch.stack((
+        top / height,
+        (height - 1 - bottom) / height,
+        left / width,
+        (width - 1 - right) / width,
+    ), dim=1)
+    return {
+        "areas": areas,
+        "empty_frames": [],
+        "maximum_adjacent_area_ratio": float((larger / smaller).max().item()),
+        "maximum_centroid_jump": float(torch.sqrt(dx.square() + dy.square()).max().item()),
+        "minimum_adjacent_iou": float((intersections / unions).min().item()),
+        "frame_border_margin": border_margins.min(dim=1).values,
+    }
+
+
+def _validate_track_metrics(
+    metrics,
+    source,
+    maximum_area_step_ratio,
+    maximum_centroid_jump,
+    minimum_adjacent_iou,
+    minimum_border_margin,
+):
+    if metrics["empty_frames"]:
+        raise ValueError(f"{source} track is empty on frames {metrics['empty_frames']}")
+    max_area_step = metrics["maximum_adjacent_area_ratio"]
+    max_jump = metrics["maximum_centroid_jump"]
+    min_iou = metrics["minimum_adjacent_iou"]
+    frame_border_margin = metrics["frame_border_margin"]
+    min_border = float(frame_border_margin.min().item())
+    if max_area_step > maximum_area_step_ratio:
+        raise ValueError(
+            f"{source} track area changes by {max_area_step:.3f}x between adjacent frames; "
+            f"limit is {maximum_area_step_ratio:.3f}x"
+        )
+    if max_jump > maximum_centroid_jump:
+        raise ValueError(
+            f"{source} track centroid jumps {max_jump:.3f} frame diagonals; "
+            f"limit is {maximum_centroid_jump:.3f}"
+        )
+    if min_iou < minimum_adjacent_iou:
+        raise ValueError(
+            f"{source} minimum adjacent-frame IoU is {min_iou:.4f}; "
+            f"minimum is {minimum_adjacent_iou:.4f}"
+        )
+    if min_border < minimum_border_margin:
+        clipped = (frame_border_margin < minimum_border_margin).nonzero(as_tuple=True)[0].tolist()
+        raise ValueError(
+            f"{source} subject is within {minimum_border_margin:.3f} of the canvas edge "
+            f"on frames {clipped}"
+        )
+    return max_area_step, max_jump, min_iou, min_border
+
+
 
 class JakkannaSCAIL2TrackValidate:
     @classmethod
@@ -326,9 +512,10 @@ class JakkannaSCAIL2TrackValidate:
                 "track_data": ("SAM3_TRACK_DATA",),
                 "reference_mask": ("MASK",),
                 "expected_frames": ("INT", {"forceInput": True}),
-                "maximum_area_step_ratio": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 100.0, "step": 0.1}),
-                "maximum_centroid_jump": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 2.0, "step": 0.01}),
-                "minimum_adjacent_iou": ("FLOAT", {"default": 0.02, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "maximum_area_step_ratio": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 100.0, "step": 0.1}),
+                "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "minimum_adjacent_iou": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "minimum_border_margin": ("FLOAT", {"default": 0.005, "min": 0.0, "max": 0.25, "step": 0.001}),
             }
         }
 
@@ -345,6 +532,7 @@ class JakkannaSCAIL2TrackValidate:
         maximum_area_step_ratio,
         maximum_centroid_jump,
         minimum_adjacent_iou,
+        minimum_border_margin,
     ):
         packed = track_data.get("packed_masks")
         if packed is None:
@@ -355,60 +543,197 @@ class JakkannaSCAIL2TrackValidate:
             raise ValueError(f"SAM 3.1 track must contain exactly one subject, got {packed.shape[1]}")
 
         masks = unpack_masks(packed)[:, 0].bool()
-        areas = masks.sum(dim=(-1, -2)).float()
-        if (areas == 0).any():
-            empty = (areas == 0).nonzero(as_tuple=True)[0].tolist()
-            raise ValueError(f"SAM 3.1 source track is empty on frames {empty}")
-
-        smaller = torch.minimum(areas[:-1], areas[1:]).clamp(min=1)
-        larger = torch.maximum(areas[:-1], areas[1:])
-        area_step_ratio = larger / smaller
-
+        metrics = _track_metrics(masks)
+        areas = metrics["areas"]
         height, width = masks.shape[-2:]
-        grid_y = torch.arange(height, device=masks.device, dtype=torch.float32).view(1, height, 1)
-        grid_x = torch.arange(width, device=masks.device, dtype=torch.float32).view(1, 1, width)
-        centroids_y = (masks * grid_y).sum(dim=(-1, -2)) / areas
-        centroids_x = (masks * grid_x).sum(dim=(-1, -2)) / areas
-        dx = (centroids_x[1:] - centroids_x[:-1]) / width
-        dy = (centroids_y[1:] - centroids_y[:-1]) / height
-        centroid_jump = torch.sqrt(dx.square() + dy.square())
-
-        intersections = (masks[:-1] & masks[1:]).sum(dim=(-1, -2)).float()
-        unions = (masks[:-1] | masks[1:]).sum(dim=(-1, -2)).float().clamp(min=1)
-        adjacent_iou = intersections / unions
-
-        max_area_step = float(area_step_ratio.max().item())
-        max_jump = float(centroid_jump.max().item())
-        min_iou = float(adjacent_iou.min().item())
-        if max_area_step > maximum_area_step_ratio:
-            raise ValueError(
-                f"SAM 3.1 track area changes by {max_area_step:.3f}x between adjacent frames; "
-                f"limit is {maximum_area_step_ratio:.3f}x"
-            )
-        if max_jump > maximum_centroid_jump:
-            raise ValueError(
-                f"SAM 3.1 track centroid jumps {max_jump:.3f} frame diagonals; "
-                f"limit is {maximum_centroid_jump:.3f}"
-            )
-        if min_iou < minimum_adjacent_iou:
-            raise ValueError(
-                f"SAM 3.1 minimum adjacent-frame IoU is {min_iou:.4f}; "
-                f"minimum is {minimum_adjacent_iou:.4f}"
-            )
+        max_area_step, max_jump, min_iou, min_border = _validate_track_metrics(
+            metrics,
+            "SAM 3.1 source",
+            maximum_area_step_ratio,
+            maximum_centroid_jump,
+            minimum_adjacent_iou,
+            minimum_border_margin,
+        )
         if reference_mask.shape[0] != 1 or not (reference_mask > 0.5).any():
             raise ValueError("Validated reference mask must contain exactly one nonempty subject")
+        original_size = track_data.get("orig_size")
+        if (
+            not isinstance(original_size, (list, tuple))
+            or len(original_size) != 2
+            or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in original_size)
+        ):
+            raise ValueError("SAM 3.1 track is missing a valid original canvas size")
+        if reference_mask.shape[-2:] != tuple(original_size):
+            raise ValueError(
+                f"Reference mask is {reference_mask.shape[-1]}x{reference_mask.shape[-2]}; "
+                f"source canvas is {original_size[1]}x{original_size[0]}"
+            )
 
         report = {
             "frames": masks.shape[0],
             "objects": 1,
+            "tracking_mask_resolution": [width, height],
+            "source_canvas_resolution": [original_size[1], original_size[0]],
             "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),
             "maximum_area_percent": float((areas.max() / (height * width) * 100).item()),
             "maximum_adjacent_area_ratio": max_area_step,
             "maximum_centroid_jump": max_jump,
             "minimum_adjacent_iou": min_iou,
+            "minimum_border_margin": min_border,
             "track_mask_sha256": _hash_tensor(masks, binary=True),
         }
         return "0", _json(report)
+
+
+class JakkannaSCAIL2PreparedTrackValidate:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_images": ("IMAGE",),
+                "driving_mask_images": ("IMAGE",),
+                "registered_reference": ("IMAGE",),
+                "reference_mask": ("MASK",),
+                "expected_frames": ("INT", {"forceInput": True}),
+                "preprocess_report": ("STRING", {"forceInput": True}),
+                "maximum_area_step_ratio": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 100.0, "step": 0.1}),
+                "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "minimum_adjacent_iou": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "minimum_border_margin": ("FLOAT", {"default": 0.005, "min": 0.0, "max": 0.25, "step": 0.001}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT")
+    RETURN_NAMES = ("source_initial_mask_report", "track_report", "validated_frames")
+    FUNCTION = "validate"
+    CATEGORY = "Jakkanna/SCAIL-2"
+
+    def validate(
+        self,
+        source_images,
+        driving_mask_images,
+        registered_reference,
+        reference_mask,
+        expected_frames,
+        preprocess_report,
+        maximum_area_step_ratio,
+        maximum_centroid_jump,
+        minimum_adjacent_iou,
+        minimum_border_margin,
+    ):
+        if source_images.ndim != 4 or source_images.shape[-1] < 3:
+            raise ValueError("Prepared source must provide an IMAGE tensor batch")
+        frames, height, width = source_images.shape[:3]
+        if frames != expected_frames:
+            raise ValueError(f"Prepared source has {frames} frames; expected {expected_frames}")
+        if driving_mask_images.ndim != 4 or driving_mask_images.shape[-1] < 3:
+            raise ValueError("Prepared driving masks must provide an RGB IMAGE tensor batch")
+        if driving_mask_images.shape[:3] != source_images.shape[:3]:
+            raise ValueError(
+                "Prepared driving masks must match the source batch exactly: "
+                f"source={tuple(source_images.shape[:3])}, masks={tuple(driving_mask_images.shape[:3])}"
+            )
+        if (
+            registered_reference.ndim != 4
+            or registered_reference.shape[0] != 1
+            or registered_reference.shape[-1] < 3
+            or registered_reference.shape[1:3] != source_images.shape[1:3]
+        ):
+            raise ValueError(
+                f"Registered reference must contain one {width}x{height} RGB image"
+            )
+        if reference_mask.ndim == 2:
+            reference_mask = reference_mask.unsqueeze(0)
+        if (
+            reference_mask.shape[0] != 1
+            or reference_mask.shape[-2:] != (height, width)
+            or not (reference_mask > 0.5).any()
+        ):
+            raise ValueError(
+                f"Reference mask must contain one nonempty {width}x{height} subject"
+            )
+        if not torch.isfinite(driving_mask_images).all():
+            raise ValueError("Prepared driving masks contain non-finite values")
+
+        palette = driving_mask_images[..., :3]
+        red_green = palette[..., :2]
+        blue = palette[..., 2]
+        if (red_green != 0).any() or not (((blue == 0) | (blue == 1)).all()):
+            raise ValueError("Prepared driving masks must contain only black and RGB blue")
+        masks = blue.bool()
+        metrics = _track_metrics(masks)
+        areas = metrics["areas"]
+        max_area_step, max_jump, min_iou, min_border = _validate_track_metrics(
+            metrics,
+            "Prepared",
+            maximum_area_step_ratio,
+            maximum_centroid_jump,
+            minimum_adjacent_iou,
+            minimum_border_margin,
+        )
+
+        try:
+            prepared = json.loads(preprocess_report)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Prepared input report is not valid JSON") from error
+        if prepared.get("schema") != "jakkanna.image_fbx_animation.v1":
+            raise ValueError("Prepared input report has an unsupported schema")
+        visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
+        if not isinstance(visible_iou, (int, float)) or visible_iou < _MINIMUM_PREPARED_VISIBLE_IOU:
+            raise ValueError(
+                f"Prepared frame-zero visible-subject IoU is {visible_iou!r}; "
+                f"minimum is {_MINIMUM_PREPARED_VISIBLE_IOU:.2f}"
+            )
+        settings = prepared.get("settings", {})
+        expected_settings = {
+            "frames": frames,
+            "fps": 16.0,
+            "width": width,
+            "height": height,
+        }
+        for name, expected in expected_settings.items():
+            if settings.get(name) != expected:
+                raise ValueError(
+                    f"Prepared input report {name}={settings.get(name)!r}; expected {expected!r}"
+                )
+
+        artifacts = prepared.get("artifacts", {})
+        source_hash = _hash_tensor(source_images[..., :3])
+        mask_hash = _hash_tensor(palette)
+        reference_hash = _hash_tensor(registered_reference[..., :3])
+        if artifacts.get("driver", {}).get("rgb16_sha256") != source_hash:
+            raise ValueError("Prepared source frames do not match the preprocessing report")
+        if artifacts.get("driving_mask", {}).get("rgb16_sha256") != mask_hash:
+            raise ValueError("Prepared driving masks do not match the preprocessing report")
+        if artifacts.get("registered_reference", {}).get("rgb16_sha256") != reference_hash:
+            raise ValueError("Registered reference does not match the preprocessing report")
+
+        initial = masks[:1].float()
+        initial_report = {
+            "objects": 1,
+            "area_percent": float(initial.mean().item() * 100),
+            "binary_mask_sha256": _hash_tensor(initial, binary=True),
+            "source": "prepared_render",
+        }
+        track_report = {
+            "frames": frames,
+            "objects": 1,
+            "source": "prepared_render",
+            "preprocess_run_id": prepared.get("run_id"),
+            "frame0_subject_iou_visible": visible_iou,
+            "tracking_mask_resolution": [width, height],
+            "source_canvas_resolution": [width, height],
+            "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),
+            "maximum_area_percent": float((areas.max() / (height * width) * 100).item()),
+            "maximum_adjacent_area_ratio": max_area_step,
+            "maximum_centroid_jump": max_jump,
+            "minimum_adjacent_iou": min_iou,
+            "minimum_border_margin": min_border,
+            "track_mask_sha256": _hash_tensor(masks, binary=True),
+            "source_rgb16_sha256": source_hash,
+            "driving_mask_rgb16_sha256": mask_hash,
+        }
+        return _json(initial_report), _json(track_report), frames
 
 
 def _scheduler(steps, shift, device):
@@ -547,7 +872,7 @@ class JakkannaSCAIL2ProductionManifest:
                 "text_encoder": (folder_paths.get_filename_list("text_encoders"),),
                 "clip_vision": (folder_paths.get_filename_list("clip_vision"),),
                 "vae": (folder_paths.get_filename_list("vae"),),
-                "attention_backend": (["PyTorch SDPA", "FlashAttention", "SageAttention", "Other"],),
+                "attention_backend": (["PyTorch SDPA", "FlashAttention", "SageAttention", "xFormers", "ComfyUI split/sub-quadratic"],),
                 "hash_model_files": ("BOOLEAN", {"default": True}),
                 "filename_prefix": ("STRING", {"default": "scail2_production/manifests/SCAIL2_replacement_production"}),
             },
@@ -562,6 +887,9 @@ class JakkannaSCAIL2ProductionManifest:
                 "effective_flow_shift": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Shift actually realized in the sigma schedule; 0 = same as flow_shift. When sigmas is connected, the run fails unless the wired schedule is the Euler/simple flow schedule at this shift."}),
                 "mode": (["replacement", "animation"], {"default": "replacement"}),
                 "sigmas": ("SIGMAS", {"tooltip": "Wire the sampled sigma schedule to record it verbatim and validate effective_flow_shift against it."}),
+                "source_images": ("IMAGE", {"tooltip": "Raw source tensor batch used by SAM and SCAIL. Connect for authoritative capture provenance."}),
+                "reference_image": ("IMAGE", {"tooltip": "Raw reference tensor used by SCAIL. Connect for authoritative reference provenance."}),
+                "preprocess_report": ("STRING", {"forceInput": True, "tooltip": "Optional prepared image/FBX input manifest."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -608,6 +936,9 @@ class JakkannaSCAIL2ProductionManifest:
         effective_flow_shift=0.0,
         mode="replacement",
         sigmas=None,
+        source_images=None,
+        reference_image=None,
+        preprocess_report=None,
         prompt=None,
         extra_pnginfo=None,
     ):
@@ -624,6 +955,120 @@ class JakkannaSCAIL2ProductionManifest:
                     f"expected {[round(float(s), 6) for s in expected]}"
                 )
             sigma_schedule = [float(s) for s in wired]
+
+        actual_attention_backend = _attention_backend()
+
+        input_data = json.loads(input_report)
+        reference_data = json.loads(reference_report)
+        noise_data = json.loads(noise_report)
+        if noise_data.get("seed") != seed:
+            raise ValueError(
+                f"Manifest seed {seed} does not match generated noise seed {noise_data.get('seed')}"
+            )
+
+        source_images_hash = None
+        if source_images is not None:
+            source_images_hash = _hash_tensor(source_images[..., :3])
+            reported_source_hash = input_data.get("source_rgb16_sha256")
+            if reported_source_hash and reported_source_hash != source_images_hash:
+                raise ValueError("Raw source tensor does not match the validated production input")
+
+        reference_image_hash = None
+        if reference_image is not None:
+            reference_image_hash = _hash_tensor(reference_image[..., :3])
+            reported_reference_hash = reference_data.get("output_rgb16_sha256")
+            if reported_reference_hash and reported_reference_hash != reference_image_hash:
+                raise ValueError("Raw reference tensor does not match the saved reference report")
+
+        prepared_input = None
+        if preprocess_report is not None:
+            try:
+                prepared_input = json.loads(preprocess_report)
+            except (TypeError, ValueError) as error:
+                raise ValueError("Preprocessing report is not valid JSON") from error
+            if prepared_input.get("schema") != "jakkanna.image_fbx_animation.v1":
+                raise ValueError("Preprocessing report has an unsupported schema")
+            prepared_source_hash = prepared_input.get("artifacts", {}).get("driver", {}).get("rgb16_sha256")
+            if source_images_hash is not None and prepared_source_hash != source_images_hash:
+                raise ValueError("Raw source tensor does not match the preprocessing report")
+
+        graph_settings = _graph_settings(prompt)
+        graph_artifacts = _graph_artifacts(prompt, hash_model_files)
+        actual_sampler = sampler_name
+        actual_scheduler = scheduler_name
+        actual_steps = steps
+        actual_cfg = cfg
+        actual_mode = mode
+        dpo_lora_strength = None
+        actual_pose_settings = {
+            "pose_strength": None,
+            "pose_start": None,
+            "pose_end": None,
+        }
+        clip_vision_crop = None
+
+        if prompt:
+            guider_node = _single_prompt_node(prompt, "CFGGuider")
+            scail_node = _single_prompt_node(prompt, "WanSCAILToVideo")
+            clip_vision_node = _single_prompt_node(prompt, "CLIPVisionEncode")
+
+            scheduler_nodes = _prompt_nodes(prompt, "BasicScheduler")
+            flow_unipc_nodes = _prompt_nodes(prompt, "JakkannaSCAIL2FlowUniPC")
+            if len(scheduler_nodes) + len(flow_unipc_nodes) != 1:
+                raise ValueError(
+                    "Manifest requires exactly one BasicScheduler or "
+                    f"JakkannaSCAIL2FlowUniPC node, got {len(scheduler_nodes) + len(flow_unipc_nodes)}"
+                )
+            if scheduler_nodes:
+                sampler_node = _single_prompt_node(prompt, "KSamplerSelect")
+                scheduler_node = scheduler_nodes[0][1]
+                actual_scheduler = _literal_prompt_input(prompt, scheduler_node, "scheduler")
+                actual_steps = _literal_prompt_input(prompt, scheduler_node, "steps")
+                actual_sampler = _literal_prompt_input(prompt, sampler_node, "sampler_name")
+            else:
+                flow_unipc_node = flow_unipc_nodes[0][1]
+                actual_scheduler = "upstream Flow-UniPC"
+                actual_sampler = "Flow-UniPC"
+                actual_steps = _literal_prompt_input(prompt, flow_unipc_node, "steps")
+                actual_flow_shift = _literal_prompt_input(prompt, flow_unipc_node, "shift")
+                if actual_flow_shift != flow_shift:
+                    raise ValueError(
+                        f"Manifest flow_shift={flow_shift:g} does not match "
+                        f"JakkannaSCAIL2FlowUniPC shift={actual_flow_shift}"
+                    )
+            actual_cfg = _literal_prompt_input(prompt, guider_node, "cfg")
+            replacement_mode = bool(_literal_prompt_input(prompt, scail_node, "replacement_mode"))
+            actual_mode = "replacement" if replacement_mode else "animation"
+            actual_pose_settings = {
+                name: _literal_prompt_input(prompt, scail_node, name)
+                for name in ("pose_strength", "pose_start", "pose_end")
+            }
+            clip_vision_crop = _literal_prompt_input(prompt, clip_vision_node, "crop")
+
+            if actual_steps != steps:
+                raise ValueError(f"Manifest steps={steps} does not match BasicScheduler steps={actual_steps}")
+            if actual_cfg != cfg:
+                raise ValueError(f"Manifest cfg={cfg:g} does not match CFGGuider cfg={actual_cfg}")
+            if actual_mode != mode:
+                raise ValueError(f"Manifest mode={mode} does not match WanSCAILToVideo mode={actual_mode}")
+            if str(actual_sampler).lower() != str(sampler_name).lower():
+                raise ValueError(
+                    f"Manifest sampler={sampler_name} does not match KSamplerSelect sampler={actual_sampler}"
+                )
+
+            for _, lora_node in _prompt_nodes(prompt, "LoraLoaderModelOnly"):
+                name = _literal_prompt_input(prompt, lora_node, "lora_name")
+                strength = _literal_prompt_input(prompt, lora_node, "strength_model")
+                if name == dpo_lora:
+                    dpo_lora_strength = strength
+                if name == acceleration_lora and strength != acceleration_lora_strength:
+                    raise ValueError(
+                        f"Manifest acceleration LoRA strength={acceleration_lora_strength:g} "
+                        f"does not match the loader strength={strength}"
+                    )
+            if dpo_lora_strength is None:
+                raise ValueError(f"Could not find the DPO LoRA loader in the prompt graph: {dpo_lora}")
+
         model_files = {
             "diffusion_model": ("diffusion_models", diffusion_model),
             "dpo_lora": ("loras", dpo_lora),
@@ -645,50 +1090,95 @@ class JakkannaSCAIL2ProductionManifest:
                 "sha256": _hash_file_cached(path) if hash_model_files else None,
             }
 
+        if graph_artifacts:
+            graph_artifact_keys = {
+                (artifact["category"], artifact["name"])
+                for artifact in graph_artifacts
+            }
+            missing = sorted(
+                name
+                for category, name in model_files.values()
+                if (category, name) not in graph_artifact_keys
+            )
+            if missing:
+                raise ValueError(
+                    f"Manifest artifacts are not loaded by the prompt graph: {', '.join(missing)}"
+                )
+
+        pose_state_signature = None
+        pose_animation = None
+        pose_studio_id = None
+        pose_nodes = _prompt_nodes(prompt, "VNCCS_PoseStudio") + _prompt_nodes(prompt, "VNCCS_PoseStudioOpenPose")
+        if pose_nodes:
+            if len(pose_nodes) != 1:
+                raise ValueError(f"Manifest requires exactly one Pose Studio node, got {len(pose_nodes)}")
+            pose_data = _literal_prompt_input(prompt, pose_nodes[0][1], "pose_data")
+            if not isinstance(pose_data, str):
+                raise ValueError("Pose Studio pose_data must be embedded in the prompt graph")
+            parsed_pose_data = json.loads(pose_data)
+            pose_state_signature = _execution_state_signature(parsed_pose_data)
+            pose_animation = parsed_pose_data.get("animation")
+            pose_studio_id = parsed_pose_data.get("studio_id")
+
         workflow = (extra_pnginfo or {}).get("workflow")
+        pose_video_mask_hash = _hash_tensor(pose_video_mask)
+        if prepared_input is not None:
+            prepared_mask_hash = prepared_input.get("artifacts", {}).get("driving_mask", {}).get("rgb16_sha256")
+            if prepared_mask_hash != pose_video_mask_hash:
+                raise ValueError("Raw driving mask does not match the preprocessing report")
+        jakkanna_root = Path(__file__).resolve().parents[1]
         manifest = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "pipeline": f"SCAIL-2 single-subject 81-frame character {mode}",
             "upstream_scail2_commit": UPSTREAM_COMMIT,
-            "comfyui_commit": _comfyui_commit(),
+            "comfyui_commit": _git_commit(Path(folder_paths.__file__).resolve().parent),
+            "jakkanna_version": _package_version(jakkanna_root),
+            "jakkanna_commit": _git_commit(jakkanna_root),
             "torch_version": torch.__version__,
             "cuda_version": torch.version.cuda,
-            "attention_backend": attention_backend,
+            "attention_backend": actual_attention_backend,
+            "declared_attention_backend": attention_backend,
             "settings": {
                 "resolution": "704x1280 or 1280x704",
                 "frames": 81,
-                "sampler": sampler_name,
-                "scheduler": scheduler_name,
-                "steps": steps,
+                "sampler": actual_sampler,
+                "scheduler": actual_scheduler,
+                "steps": actual_steps,
                 "flow_shift": flow_shift,
                 "effective_flow_shift": effective_shift,
                 "sigma_schedule": sigma_schedule,
-                "cfg": cfg,
-                "dpo_lora_strength": 1.0,
+                "cfg": actual_cfg,
+                "dpo_lora_strength": dpo_lora_strength,
                 "acceleration_lora": None if acceleration_lora == "None" else {
                     "name": acceleration_lora,
                     "strength": acceleration_lora_strength,
                 },
-                "replacement_mode": mode == "replacement",
-                "pose_strength": 1.0,
-                "pose_start": 0.0,
-                "pose_end": 1.0,
-                "clip_vision_crop": "none",
+                "replacement_mode": actual_mode == "replacement",
+                **actual_pose_settings,
+                "clip_vision_crop": clip_vision_crop,
                 "seed": seed,
             },
             "positive_prompt": positive_prompt,
             "negative_prompt": negative_prompt,
-            "input": json.loads(input_report),
-            "reference": json.loads(reference_report),
+            "input": input_data,
+            "preprocess": prepared_input,
+            "reference": reference_data,
             "source_initial_mask": json.loads(source_initial_mask_report),
             "reference_mask": json.loads(reference_mask_report),
             "source_track": json.loads(track_report),
-            "noise": json.loads(noise_report),
-            "pose_video_mask_rgb16_sha256": _hash_tensor(pose_video_mask),
+            "noise": noise_data,
+            "source_capture_rgb16_sha256": source_images_hash,
+            "reference_input_rgb16_sha256": reference_image_hash,
+            "pose_state_sha256": pose_state_signature,
+            "pose_studio_id": pose_studio_id,
+            "pose_animation": pose_animation,
+            "pose_video_mask_rgb16_sha256": pose_video_mask_hash,
             "reference_image_mask_rgb16_sha256": _hash_tensor(reference_image_mask),
             "decoded_output_rgb16_sha256": _hash_tensor(output_images),
             "decoded_output_frames": output_images.shape[0],
             "artifacts": artifacts,
+            "graph_artifacts": graph_artifacts,
+            "graph_settings": graph_settings,
             "prompt_graph_sha256": hashlib.sha256(_json(prompt or {}).encode()).hexdigest(),
             "workflow_sha256": hashlib.sha256(_json(workflow or {}).encode()).hexdigest(),
             "production_node_sha256": _hash_file(__file__),
@@ -713,6 +1203,7 @@ NODE_CLASS_MAPPINGS = {
     "JakkannaSCAIL2SingleSubjectMask": JakkannaSCAIL2SingleSubjectMask,
     "JakkannaSCAIL2ReferencePNG16Save": JakkannaSCAIL2ReferencePNG16Save,
     "JakkannaSCAIL2TrackValidate": JakkannaSCAIL2TrackValidate,
+    "JakkannaSCAIL2PreparedTrackValidate": JakkannaSCAIL2PreparedTrackValidate,
     "JakkannaSCAIL2UpstreamNoise": JakkannaSCAIL2UpstreamNoise,
     "JakkannaSCAIL2ProductionManifest": JakkannaSCAIL2ProductionManifest,
 }
@@ -723,6 +1214,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "JakkannaSCAIL2SingleSubjectMask": "Jakkanna SCAIL-2 Validate Subject Mask",
     "JakkannaSCAIL2ReferencePNG16Save": "Jakkanna SCAIL-2 Save 16-bit Reference",
     "JakkannaSCAIL2TrackValidate": "Jakkanna SCAIL-2 Validate Track",
+    "JakkannaSCAIL2PreparedTrackValidate": "Jakkanna SCAIL-2 Validate Prepared Track",
     "JakkannaSCAIL2UpstreamNoise": "Jakkanna SCAIL-2 Upstream Noise",
     "JakkannaSCAIL2ProductionManifest": "Jakkanna SCAIL-2 Save Manifest",
 }

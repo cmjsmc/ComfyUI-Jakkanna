@@ -1,3 +1,29 @@
+# Version 1.3.0
+## State-Bound Animation Capture and Production Provenance
+
+*   Bound Pose Studio execution to the exact browser state that supplied each
+    capture and added a direct tensor-batch output for animation workflows.
+*   Preserved Mixamo root translation by default and recorded explicit
+    preserved or in-place root-motion policy in saved animation state.
+*   Validated SCAIL-2 inputs before video encoding, tightened SAM track
+    continuity and canvas-clearance gates, and checked the original tracking
+    canvas against the reference mask.
+*   Derived sampler, scheduler, conditioning, model, attention, workflow, and
+    repository provenance from the executed graph and cross-checked raw source
+    and reference tensor hashes.
+*   Updated bundled SCAIL-2 workflows to consume the direct Pose Studio batch
+    and attach authoritative source and reference tensors to their manifests.
+*   Added content-addressed image/FBX preprocessing with SAM 3D Body
+    registration, strict Mixamo retarget validation, prepared-mask continuity
+    checks, and generated Fast SCAIL-2 UI/API workflows.
+*   Added a greenfield three-input image/FBX workflow with automatic short-clip
+    timing, subject-scale-aware root-motion framing, and registration quality
+    gates.
+*   Made preprocessing cache identity safe for Registry ZIP installations by
+    keying it to the immutable package version when Git metadata is unavailable.
+*   Declared the minimum ComfyUI, Python, CUDA, model, and VideoHelperSuite
+    requirements for the greenfield workflow.
+
 # Version 1.2.0
 ## FBX Animation and SCAIL-2 Production Workflows
 

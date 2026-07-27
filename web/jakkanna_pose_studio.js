@@ -10,6 +10,11 @@ import { PoseViewerCore, IK_CHAINS } from "./jakkanna_pose_studio_core.js";
 import { HAND_PRESETS } from "./jakkanna_hand_presets.js";
 import { importMixamoFBXAsPoses } from "./jakkanna_mixamo_import.js";
 import { detectAndParseJSON, extractKeypointsFromImage, convertOpenPoseToPose, roundTripTest } from "./jakkanna_openpose_import.js";
+import {
+    createStudioId,
+    poseExecutionStateSignature,
+    poseExecutionStatesEqual,
+} from "./jakkanna_pose_state.js";
 
 const JAKKANNA_POSE_MORPH_WORKER_URL = new URL("./jakkanna_pose_morph_worker.js", import.meta.url);
 const JAKKANNA_POSE_MAX_COUNT = 128;
@@ -2698,6 +2703,7 @@ function enablePoseStudioCanvasNavigationForwarding(root) {
 class PoseStudioWidget {
     constructor(node) {
         this.node = node;
+        this.studioId = createStudioId();
         this.container = null;
         this.canvas = null;
         this.viewer = null;
@@ -2756,6 +2762,7 @@ class PoseStudioWidget {
             animation_fps: 16,
             animation_start_seconds: 0,
             animation_timing: "REALTIME",
+            animation_root_motion: "PRESERVE",
             bg_color: [255, 255, 255],
             debugMode: false,
             debugPortraitMode: false, // Focus on upper body in debug mode
@@ -3517,6 +3524,11 @@ class PoseStudioWidget {
         );
         exportSection.content.appendChild(animationTimingField);
 
+        const animationRootMotionField = this.createSelectField(
+            "Root Motion", "animation_root_motion", ["PRESERVE", "IN_PLACE"]
+        );
+        exportSection.content.appendChild(animationRootMotionField);
+
         const colorField = this.createColorField("Background", "bg_color");
         exportSection.content.appendChild(colorField);
 
@@ -3656,6 +3668,12 @@ class PoseStudioWidget {
         };
         this.refBtn = refBtn;
 
+        const turntableBtn = document.createElement("button");
+        turntableBtn.className = "jakkanna-ps-btn";
+        turntableBtn.innerHTML = '<span class="jakkanna-ps-btn-icon">↻</span> 81-view Turntable';
+        turntableBtn.title = "Repeat the current fixed pose at 81 evenly spaced angles for SCAIL-2 and RealityScan";
+        turntableBtn.addEventListener("click", () => this.createRealityScanTurntable());
+
         const settingsBtn = document.createElement("button");
         settingsBtn.className = "jakkanna-ps-btn";
         settingsBtn.innerHTML = '<span class="jakkanna-ps-btn-icon">⚙️</span>';
@@ -3666,6 +3684,7 @@ class PoseStudioWidget {
         footer.appendChild(exportBtn);
         footer.appendChild(importBtn);
         footer.appendChild(refBtn);
+        footer.appendChild(turntableBtn);
         footer.appendChild(settingsBtn);
 
         centerPanel.appendChild(actions);
@@ -5949,6 +5968,68 @@ class PoseStudioWidget {
         this.syncToNode();
     }
 
+    createRealityScanTurntable() {
+        if (!this.viewer || !this.viewer.isInitialized()) {
+            this.showMessage("Pose viewer is not ready.", true);
+            return false;
+        }
+
+        const frameCount = 81;
+        const fps = 16;
+        const basePose = this.viewer.getPose();
+        basePose.cameraParams = this.currentCameraParams();
+        basePose.prompt = this.getPosePrompt(this.activeTab);
+        const baseRotation = Array.isArray(basePose.modelRotation)
+            ? basePose.modelRotation.map(value => Number(value) || 0)
+            : [0, 0, 0];
+        const prompt = basePose.prompt || "";
+
+        this.exportParams.view_width = 704;
+        this.exportParams.view_height = 1280;
+        this.exportParams.output_mode = "LIST";
+        this.exportParams.animation_frames = frameCount;
+        this.exportParams.animation_fps = fps;
+        this.exportParams.animation_start_seconds = 0;
+        this.exportParams.animation_timing = "REALTIME";
+        this.exportParams.bg_color = [0, 0, 0];
+        this.exportParams.debugMode = false;
+        this.exportParams.background_url = null;
+
+        this.poses = Array.from({ length: frameCount }, (_unused, index) => {
+            const pose = JSON.parse(JSON.stringify(basePose));
+            pose.modelRotation = [baseRotation[0], baseRotation[1] + index * 360 / frameCount, baseRotation[2]];
+            return pose;
+        });
+        this.posePrompts = Array(frameCount).fill(prompt);
+        this.poseCaptures = Array(frameCount).fill(null);
+        this.poseOpenPoseKeypoints = Array(frameCount).fill(null);
+        this.lightingPrompts = Array(frameCount).fill("");
+        this.activeTab = 0;
+        this.setAnimationMetadata({
+            source_format: "Jakkanna RealityScan turntable",
+            sampled_frames: frameCount,
+            sample_times_seconds: Array.from({ length: frameCount }, (_unused, index) => index / fps),
+            sample_interval_seconds: 1 / fps,
+            timing_mode: "REALTIME",
+            turntable_degrees: 360,
+            turntable_step_degrees: 360 / frameCount,
+            duplicate_endpoint: false,
+        });
+
+        this.clearSAMCameraMode();
+        this.viewer.setPose(this.poses[0], true);
+        this.syncCameraWidgets();
+        this.updateCaptureCameraPreview();
+        this.updateRotationSliders();
+        this.updateTabs();
+        this.syncPromptFieldToActiveTab();
+        const captured = this.syncToNode(true);
+        if (captured) {
+            this.showMessage("Created 81 fixed-pose turntable views at 704×1280.");
+        }
+        return captured;
+    }
+
     showExportModal() {
         // Create modal structure
         const overlay = document.createElement("div");
@@ -6381,6 +6462,7 @@ class PoseStudioWidget {
                         frameCount: this.exportParams.animation_frames,
                         startTime: this.exportParams.animation_start_seconds,
                         timingMode: this.exportParams.animation_timing,
+                        preserveRootMotion: this.exportParams.animation_root_motion !== "IN_PLACE",
                     });
 
                     if (result.poses.length > JAKKANNA_POSE_MAX_COUNT) {
@@ -9206,8 +9288,8 @@ class PoseStudioWidget {
             }
         }
 
-        // Update hidden pose_data widget
-        // Exclude background_url and captured_images from widget to avoid inflating workflow size.
+        // Update hidden pose_data widget. Captures remain outside the workflow and are
+        // keyed by an immutable signature of the state that produced them.
         // Captures are uploaded to server-side LRU cache; only the capture_id is stored in widget.
         const oversizedPrompt = this.lightingPrompts.findIndex(
             prompt => typeof prompt === "string" && prompt.length > JAKKANNA_LIGHTING_PROMPT_MAX_LENGTH
@@ -9224,15 +9306,13 @@ class PoseStudioWidget {
         const exportToSave = { ...this.exportParams };
         delete exportToSave.background_url;
 
-        // captured_images are excluded from the widget to avoid inflating workflow size
-        // (each 1024×1024 PNG is ~500KB base64; multiple poses exceed ComfyUI localStorage limit)
-        // They are kept in this.poseCaptures (JS memory) and also uploaded to server-side LRU cache.
-        // Only capture_id is stored in the widget so Python can fallback to the cache if needed.
+        // captured_images are excluded from the widget to avoid inflating workflow size.
         const captureId = `jakkanna_capture_${this.node.id}`;
         const hasCaptures = this.poseCaptures && this.poseCaptures.some(capture => capture);
         if (hasCaptures) this._captureVersion += 1;
 
         const data = {
+            studio_id: this.studioId,
             mesh: this.meshParams,
             export: exportToSave,
             poses: this.poses,
@@ -9245,18 +9325,20 @@ class PoseStudioWidget {
             background_url: this.exportParams.background_url || null
         };
 
-        // Upload captures to server cache without blocking routine editor updates.
-        if (hasCaptures) {
-            fetch('/vnccs/pose_captures_upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    capture_id: captureId,
-                    capture_version: this._captureVersion,
-                    captured_images: this.poseCaptures,
-                    lighting_prompts: this.lightingPrompts || []
-                })
-            })
+        // Upload captures to the state-bound cache without blocking routine editor updates.
+        if (hasCaptures && options.skipCacheUpload !== true) {
+            poseExecutionStateSignature(data)
+                .then(stateSignature => fetch('/vnccs/pose_captures_upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        state_signature: stateSignature,
+                        capture_version: this._captureVersion,
+                        captured_images: this.poseCaptures,
+                        openpose_keypoints: this.poseOpenPoseKeypoints || [],
+                        lighting_prompts: this.lightingPrompts || []
+                    })
+                }))
                 .then(response => requireSuccessfulResponse(response, "Capture upload"))
                 .catch(e => {
                     console.error("[Jakkanna Pose Studio] Capture upload failed:", e);
@@ -9293,6 +9375,9 @@ class PoseStudioWidget {
 
         try {
             const data = JSON.parse(widget.value);
+            if (typeof data.studio_id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(data.studio_id)) {
+                this.studioId = data.studio_id;
+            }
             const captureVersion = Number(data.capture_version);
             if (Number.isSafeInteger(captureVersion) && captureVersion >= 0) {
                 this._captureVersion = Math.max(this._captureVersion, captureVersion);
@@ -9542,6 +9627,15 @@ app.registerExtension({
                 unregisterStudio(studio) {
                     this.studios.delete(studio);
                 },
+                findStudio(studioId, nodeId) {
+                    if (studioId) {
+                        for (const studio of this.studios) {
+                            if (studio?.studioId === studioId) return studio;
+                        }
+                    }
+                    const node = app.graph?.getNodeById(nodeId);
+                    return node?.studioWidget || null;
+                },
                 hookNode(node) {
                     if (!node || node.type !== "CharacterCreatorV2") return;
                     const dataWidget = node.widgets?.find(w => w.name === "widget_data");
@@ -9584,16 +9678,18 @@ app.registerExtension({
             return api;
         })();
 
-        const uploadPoseStudioSync = async (node, nodeId) => {
-            const poseWidget = node.widgets.find(w => w.name === "pose_data");
+        const uploadPoseStudioSync = async (studio, nodeId, requestId, stateSignature, includePoseData = false) => {
+            const poseWidget = studio.node.widgets.find(w => w.name === "pose_data");
             if (!poseWidget) return;
-            const widgetData = JSON.parse(poseWidget.value);
             const payload = {
-                ...widgetData,
                 node_id: nodeId,
-                captured_images: node.studioWidget.poseCaptures || [],
-                openpose_keypoints: node.studioWidget.poseOpenPoseKeypoints || [],
-                lighting_prompts: node.studioWidget.lightingPrompts || []
+                request_id: requestId,
+                state_signature: stateSignature,
+                capture_version: studio._captureVersion,
+                captured_images: studio.poseCaptures || [],
+                openpose_keypoints: studio.poseOpenPoseKeypoints || [],
+                lighting_prompts: studio.lightingPrompts || [],
+                pose_data: includePoseData ? poseWidget.value : undefined,
             };
 
             const response = await fetch('/vnccs/pose_sync/upload_capture', {
@@ -9606,26 +9702,42 @@ app.registerExtension({
 
         api.addEventListener("vnccs_req_pose_sync", async (event) => {
             const nodeId = event.detail.node_id;
-            const node = app.graph.getNodeById(nodeId);
-            if (node && node.studioWidget) {
+            const studio = window.__jakkannaPoseStudioCharacterCreatorSync?.findStudio(
+                event.detail.studio_id,
+                nodeId,
+            );
+            if (studio) {
                 try {
-                    // Safe mode: ensure viewer is initialized
-                    if (!node.studioWidget.viewer || !node.studioWidget.viewer.isInitialized()) {
-                        await node.studioWidget.loadModel();
+                    const poseWidget = studio.node.widgets.find(w => w.name === "pose_data");
+                    const currentState = poseWidget?.value ? JSON.parse(poseWidget.value) : null;
+                    const expectedState = event.detail.execution_state;
+                    if (!currentState || !poseExecutionStatesEqual(currentState, expectedState)) {
+                        console.warn("[Jakkanna] Ignoring capture request for a different Pose Studio state.");
+                        return;
+                    }
+                    const expectedSignature = await poseExecutionStateSignature(expectedState);
+                    if (expectedSignature !== event.detail.state_signature) {
+                        throw new Error("Backend Pose Studio state signature is invalid.");
                     }
 
-                    // Update lights and state before capture
-                    if (node.studioWidget.viewer) {
-                        node.studioWidget.viewer.updateLights(node.studioWidget.lightParams);
-                    }
-                    if (!node.studioWidget.syncToNode(true)) return;
+                    if (!studio.viewer || !studio.viewer.isInitialized()) await studio.loadModel();
 
-                    // Build payload from widget metadata + in-memory captures
-                    // (captured_images are no longer stored in the widget to keep workflow size small)
-                    await uploadPoseStudioSync(node, nodeId);
+                    studio.viewer.updateLights(studio.lightParams);
+                    if (!studio.syncToNode(true, { skipCacheUpload: true })) return;
+
+                    const capturedState = JSON.parse(poseWidget.value);
+                    if (!poseExecutionStatesEqual(capturedState, expectedState)) {
+                        throw new Error("Pose Studio state changed while captures were being rendered.");
+                    }
+                    await uploadPoseStudioSync(
+                        studio,
+                        nodeId,
+                        event.detail.request_id,
+                        expectedSignature,
+                    );
                 } catch (e) {
                     console.error("[Jakkanna] Batch Sync Error:", e);
-                    node.studioWidget.showMessage(e?.message || "Pose sync failed.", true);
+                    studio.showMessage(e?.message || "Pose sync failed.", true);
                 }
             }
         });
@@ -9633,11 +9745,11 @@ app.registerExtension({
         api.addEventListener("vnccs_apply_sam3d_pose", async (event) => {
             const nodeId = event.detail.node_id;
             const poseData = event.detail.pose_data;
-            const node = app.graph.getNodeById(nodeId);
-            if (!node?.studioWidget || !poseData) return;
+            const studio = window.__jakkannaPoseStudioCharacterCreatorSync?.findStudio(null, nodeId);
+            if (!studio || !poseData) return;
 
             try {
-                const widget = node.studioWidget;
+                const widget = studio;
                 if (!widget.viewer || !widget.viewer.isInitialized()) {
                     await widget.loadModel();
                 }
@@ -9664,8 +9776,17 @@ app.registerExtension({
 
                 widget.poses[widget.activeTab] = widget.viewer.getPose();
                 widget.updateTabs();
-                if (!widget.syncToNode(true)) return;
-                await uploadPoseStudioSync(node, nodeId);
+                if (!widget.syncToNode(true, { skipCacheUpload: true })) return;
+                const poseWidget = widget.node.widgets.find(w => w.name === "pose_data");
+                const syncedData = JSON.parse(poseWidget.value);
+                const stateSignature = await poseExecutionStateSignature(syncedData);
+                await uploadPoseStudioSync(
+                    widget,
+                    nodeId,
+                    event.detail.request_id,
+                    stateSignature,
+                    true,
+                );
             } catch (e) {
                 console.error("[Jakkanna] SAM3D pose_image apply error:", e);
             }

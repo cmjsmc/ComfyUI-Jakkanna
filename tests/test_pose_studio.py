@@ -145,12 +145,23 @@ class CapturedImageTests(unittest.TestCase):
             "export": {"output_mode": "LIST"},
         }
 
-        images, prompts = self.pose_studio.JakkannaPoseStudio().generate(json.dumps(data))
+        images, prompts, image_batch = self.pose_studio.JakkannaPoseStudio().generate(json.dumps(data))
 
         self.assertEqual(len(images), 81)
         self.assertEqual(prompts, data["lighting_prompts"])
         self.assertTrue(all(tuple(image.shape) == (1, 2, 2, 3) for image in images))
+        self.assertEqual(tuple(image_batch.shape), (81, 2, 2, 3))
         self.assertAlmostEqual(float(images[0][0, 0, 0, 0]), 12.0 / 255.0)
+
+    def test_identical_pose_states_must_render_identical_pixels(self):
+        data = {
+            "poses": [{}, {}],
+            "captured_images": [image_data_url((1, 2, 3)), image_data_url((4, 5, 6))],
+            "export": {"output_mode": "LIST"},
+        }
+
+        with self.assertRaisesRegex(ValueError, "identical pose states differently"):
+            self.pose_studio.JakkannaPoseStudio().generate(json.dumps(data))
 
     def test_generate_rejects_incomplete_capture_set(self):
         data = {
@@ -233,6 +244,7 @@ class PoseDataValidationTests(unittest.TestCase):
                 "animation_fps": 16,
                 "animation_start_seconds": 0,
                 "animation_timing": "REALTIME",
+                "animation_root_motion": "PRESERVE",
             },
         })
 
@@ -242,10 +254,41 @@ class PoseDataValidationTests(unittest.TestCase):
                 "export": {"animation_timing": "STRETCH"},
             })
 
+        with self.assertRaisesRegex(ValueError, "PRESERVE or IN_PLACE"):
+            self.pose_studio._validate_pose_data({
+                "poses": [{}],
+                "export": {"animation_root_motion": "SIDEWAYS"},
+            })
+
         self.pose_studio._validate_pose_data({
             "poses": [{}],
             "export": {"animation_frames": None, "animation_timing": "FIT_CLIP"},
         })
+
+    def test_execution_state_signature_is_capture_cache_independent(self):
+        first = {
+            "studio_id": "studio-123",
+            "poses": [{"bones": {"head": [0, 1.25, -2]}}],
+            "mesh": {"height": 0.5},
+            "capture_id": "legacy-1",
+            "capture_version": 1,
+            "captured_images": ["old"],
+        }
+        second = {
+            **first,
+            "capture_id": "legacy-2",
+            "capture_version": 99,
+            "captured_images": ["new"],
+        }
+        self.assertEqual(
+            self.pose_studio._execution_state_signature(first),
+            self.pose_studio._execution_state_signature(second),
+        )
+        second["poses"] = [{"bones": {"head": [0, 1.5, -2]}}]
+        self.assertNotEqual(
+            self.pose_studio._execution_state_signature(first),
+            self.pose_studio._execution_state_signature(second),
+        )
 
     def test_prompt_from_list_selects_one_scalar_prompt(self):
         node = self.pose_studio.JakkannaPromptFromList()
@@ -266,9 +309,10 @@ class PoseDataValidationTests(unittest.TestCase):
             "captured_images": [image_data_url()],
         }
 
-        images, _prompts = NoSyncPoseStudio().generate(json.dumps(data), unique_id="42")
+        images, _prompts, image_batch = NoSyncPoseStudio().generate(json.dumps(data), unique_id="42")
 
         self.assertEqual(len(images), 1)
+        self.assertEqual(tuple(image_batch.shape), (1, 2, 2, 3))
 
     def test_pose_image_failure_is_not_silently_ignored(self):
         class FailedPoseImage(self.pose_studio.JakkannaPoseStudio):
@@ -463,7 +507,17 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("const JAKKANNA_CAPTURE_MAX_TOTAL_PIXELS = 128 * 1024 * 1024;", studio)
         self.assertIn("promptArea.maxLength = JAKKANNA_LIGHTING_PROMPT_MAX_LENGTH;", studio)
         self.assertIn("capture_version: this._captureVersion", studio)
-        self.assertIn("if (!node.studioWidget.syncToNode(true)) return;", studio)
+        self.assertIn("poseExecutionStatesEqual(currentState, expectedState)", studio)
+        self.assertIn("request_id: requestId", studio)
+        self.assertIn("state_signature: stateSignature", studio)
+
+    def test_capture_settles_world_and_skeleton_state(self):
+        with open(os.path.join(ROOT, "web", "jakkanna_pose_studio_core.js"), "r", encoding="utf-8") as handle:
+            core = handle.read()
+
+        self.assertIn("settlePoseForCapture()", core)
+        capture = core[core.index("capture(width, height"):core.index("dispose()", core.index("capture(width, height"))]
+        self.assertIn("this.settlePoseForCapture();", capture)
 
     def test_mixamo_sampler_is_hard_capped(self):
         with open(os.path.join(ROOT, "web", "jakkanna_mixamo_import.js"), "r", encoding="utf-8") as handle:
@@ -527,14 +581,31 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("animation_frames: 81", studio)
         self.assertIn("animation_fps: 16", studio)
         self.assertIn('animation_timing: "REALTIME"', studio)
+        self.assertIn('animation_root_motion: "PRESERVE"', studio)
         self.assertIn("frameCount: this.exportParams.animation_frames", studio)
         self.assertIn('input.placeholder = "Auto"', studio)
         self.assertIn("loadedExport.animation_frames = null", studio)
         self.assertIn("fps: this.exportParams.animation_fps", studio)
+        self.assertIn('preserveRootMotion: this.exportParams.animation_root_motion !== "IN_PLACE"', studio)
         self.assertIn("animation: this.animationMetadata", studio)
         self.assertIn("this.reconcileAnimationMetadata();", studio)
         self.assertIn("this.invalidateAnimationMetadata();", studio)
         self.assertIn("if (!this.animationMetadata)", studio)
+        with open(os.path.join(ROOT, "web", "jakkanna_mixamo_import.js"), "r", encoding="utf-8") as handle:
+            mixamo = handle.read()
+        self.assertIn('root_motion: preserveRootMotion ? "preserved" : "in_place"', mixamo)
+
+    def test_pose_studio_builds_realityscan_turntable_without_duplicate_endpoint(self):
+        with open(os.path.join(ROOT, "web", "jakkanna_pose_studio.js"), "r", encoding="utf-8") as handle:
+            studio = handle.read()
+
+        self.assertIn("createRealityScanTurntable()", studio)
+        self.assertIn("const frameCount = 81;", studio)
+        self.assertIn("index * 360 / frameCount", studio)
+        self.assertIn("duplicate_endpoint: false", studio)
+        self.assertIn("this.exportParams.view_width = 704;", studio)
+        self.assertIn("this.exportParams.view_height = 1280;", studio)
+        self.assertIn("this.exportParams.bg_color = [0, 0, 0];", studio)
 
     def test_frontend_openpose_uses_face_landmarks(self):
         with open(os.path.join(ROOT, "web", "jakkanna_pose_studio_core.js"), "r", encoding="utf-8") as handle:

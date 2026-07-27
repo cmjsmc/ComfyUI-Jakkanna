@@ -8,6 +8,7 @@ requests
 torch
 torchvision
 numpy
+scipy
 Pillow
 transformers
 safetensors

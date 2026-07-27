@@ -12,9 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMFY_NODE_CHANGELOG: >-
-        Adds deterministic FBX animation import, offline pinned loader modules,
-        posed OBJ/GLB export, and canonical Krea 2 plus SCAIL-2 Fast and
-        Production workflows with validation and reproducibility manifests.
+        Adds a three-input image-and-FBX SCAIL-2 animation workflow with
+        automatic subject fitting, camera registration, short-clip timing,
+        root-motion framing, prepared-track validation, release-safe cache
+        identity, and reproducibility manifests.
     steps:
       - name: Check out code
         uses: actions/checkout@v7

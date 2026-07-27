@@ -3,10 +3,13 @@ from .nodes.qwen_detailer import JakkannaQwenDetailer, JakkannaBBoxExtractor
 from .nodes.model_manager import JakkannaModelManager, JakkannaModelSelector
 from .nodes.pose_studio import JakkannaPoseStudio, JakkannaPromptFromList
 from .nodes.openpose_export import JakkannaPoseStudioOpenPose, JakkannaReplaceOpenPoseHands
+from .nodes.realityscan import JakkannaRealityScanImageSetSave
+from .nodes.image_fbx_animation import JakkannaImageFBXPrepare
 from .nodes.scail2_production import (
     JakkannaSCAIL2FlowUniPC,
     JakkannaSCAIL2ProductionInputValidate,
     JakkannaSCAIL2ProductionManifest,
+    JakkannaSCAIL2PreparedTrackValidate,
     JakkannaSCAIL2ReferencePNG16Save,
     JakkannaSCAIL2SingleSubjectMask,
     JakkannaSCAIL2TrackValidate,
@@ -28,9 +31,12 @@ NODE_CLASS_MAPPINGS = {
     "VNCCS_ModelSelector": JakkannaModelSelector,
     "VNCCS_PoseStudio": JakkannaPoseStudio,
     "JakkannaPromptFromList": JakkannaPromptFromList,
+    "JakkannaRealityScanImageSetSave": JakkannaRealityScanImageSetSave,
+    "JakkannaImageFBXPrepare": JakkannaImageFBXPrepare,
     "JakkannaSCAIL2FlowUniPC": JakkannaSCAIL2FlowUniPC,
     "JakkannaSCAIL2ProductionInputValidate": JakkannaSCAIL2ProductionInputValidate,
     "JakkannaSCAIL2ProductionManifest": JakkannaSCAIL2ProductionManifest,
+    "JakkannaSCAIL2PreparedTrackValidate": JakkannaSCAIL2PreparedTrackValidate,
     "JakkannaSCAIL2ReferencePNG16Save": JakkannaSCAIL2ReferencePNG16Save,
     "JakkannaSCAIL2SingleSubjectMask": JakkannaSCAIL2SingleSubjectMask,
     "JakkannaSCAIL2TrackValidate": JakkannaSCAIL2TrackValidate,
@@ -50,9 +56,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VNCCS_ModelSelector": "Jakkanna Model Selector",
     "VNCCS_PoseStudio": "Jakkanna Pose Studio",
     "JakkannaPromptFromList": "Jakkanna Prompt From List",
+    "JakkannaRealityScanImageSetSave": "Jakkanna RealityScan Save Image Set",
+    "JakkannaImageFBXPrepare": "Jakkanna Image + FBX Prepare",
     "JakkannaSCAIL2FlowUniPC": "Jakkanna SCAIL-2 Flow-UniPC",
     "JakkannaSCAIL2ProductionInputValidate": "Jakkanna SCAIL-2 Validate Input",
     "JakkannaSCAIL2ProductionManifest": "Jakkanna SCAIL-2 Save Manifest",
+    "JakkannaSCAIL2PreparedTrackValidate": "Jakkanna SCAIL-2 Validate Prepared Track",
     "JakkannaSCAIL2ReferencePNG16Save": "Jakkanna SCAIL-2 Save 16-bit Reference",
     "JakkannaSCAIL2SingleSubjectMask": "Jakkanna SCAIL-2 Validate Subject Mask",
     "JakkannaSCAIL2TrackValidate": "Jakkanna SCAIL-2 Validate Track",
@@ -79,6 +88,7 @@ import tempfile
 import threading
 
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CAPTURE_CACHE_MAX_IMAGES = 128
 _CAPTURE_CACHE_MAX_TOTAL_CHARS = 64 * 1024 * 1024
 _CAPTURE_CACHE_MAX_PROMPT_CHARS = 4096
@@ -243,6 +253,7 @@ def _jakkanna_validate_capture_payload(data):
         raise ValueError("capture payload must be an object")
     captured_images = data.get("captured_images", [])
     lighting_prompts = data.get("lighting_prompts", [])
+    openpose_keypoints = data.get("openpose_keypoints", [])
     capture_version = data.get("capture_version", 0)
     if isinstance(capture_version, bool) or not isinstance(capture_version, int) or capture_version < 0:
         raise ValueError("capture_version must be a non-negative integer")
@@ -269,7 +280,11 @@ def _jakkanna_validate_capture_payload(data):
         raise ValueError(
             f"lighting_prompts entries must not exceed {_CAPTURE_CACHE_MAX_PROMPT_CHARS} characters"
         )
-    return captured_images, lighting_prompts, capture_version
+    if not isinstance(openpose_keypoints, list):
+        raise ValueError("openpose_keypoints must be a list")
+    if len(openpose_keypoints) > _CAPTURE_CACHE_MAX_IMAGES:
+        raise ValueError(f"openpose_keypoints limit is {_CAPTURE_CACHE_MAX_IMAGES}")
+    return captured_images, lighting_prompts, openpose_keypoints, capture_version
 
 def _jakkanna_validate_unicanvas_state_payload(data):
     state = data.get("state")
@@ -700,15 +715,14 @@ JAKKANNA_CAPTURE_CACHE = {}
 _CAPTURE_CACHE_MAX = 10
 _CAPTURE_CACHE_LOCK = threading.Lock()
 
-def _jakkanna_get_capture_cache(capture_id, min_version=0):
-    capture_id = _jakkanna_safe_id(capture_id, "capture")
+def _jakkanna_get_capture_cache(state_signature):
+    if not isinstance(state_signature, str) or not _SHA256_RE.fullmatch(state_signature):
+        return None
     with _CAPTURE_CACHE_LOCK:
-        entry = JAKKANNA_CAPTURE_CACHE.pop(capture_id, None)
+        entry = JAKKANNA_CAPTURE_CACHE.pop(state_signature, None)
         if entry is None:
             return None
-        JAKKANNA_CAPTURE_CACHE[capture_id] = entry
-        if entry.get("capture_version", 0) < min_version:
-            return None
+        JAKKANNA_CAPTURE_CACHE[state_signature] = entry
         return entry
 
 def _jakkanna_register_capture_cache():
@@ -726,27 +740,27 @@ def _jakkanna_register_capture_cache():
             data = await request.json()
             if not isinstance(data, dict):
                 return web.json_response({"error": "capture payload must be an object"}, status=400)
-            capture_id = data.get("capture_id")
-            if not capture_id:
-                return web.json_response({"error": "missing capture_id"}, status=400)
-            capture_id = _jakkanna_safe_id(capture_id, "capture")
+            state_signature = data.get("state_signature")
+            if not isinstance(state_signature, str) or not _SHA256_RE.fullmatch(state_signature):
+                return web.json_response({"error": "state_signature must be a lowercase SHA-256 digest"}, status=400)
             try:
-                captured_images, lighting_prompts, capture_version = _jakkanna_validate_capture_payload(data)
+                captured_images, lighting_prompts, openpose_keypoints, capture_version = _jakkanna_validate_capture_payload(data)
             except ValueError as exc:
                 return web.json_response({"error": str(exc)}, status=413)
 
             with _CAPTURE_CACHE_LOCK:
-                existing = JAKKANNA_CAPTURE_CACHE.get(capture_id)
+                existing = JAKKANNA_CAPTURE_CACHE.get(state_signature)
                 if existing and existing.get("capture_version", 0) > capture_version:
                     return web.json_response({
                         "status": "stale",
-                        "capture_id": capture_id,
+                        "state_signature": state_signature,
                         "capture_version": capture_version,
                     })
-                JAKKANNA_CAPTURE_CACHE.pop(capture_id, None)
-                JAKKANNA_CAPTURE_CACHE[capture_id] = {
+                JAKKANNA_CAPTURE_CACHE.pop(state_signature, None)
+                JAKKANNA_CAPTURE_CACHE[state_signature] = {
                     "captured_images": captured_images,
                     "lighting_prompts": lighting_prompts,
+                    "openpose_keypoints": openpose_keypoints,
                     "capture_version": capture_version,
                 }
 
@@ -756,16 +770,15 @@ def _jakkanna_register_capture_cache():
 
             return web.json_response({
                 "status": "ok",
-                "capture_id": capture_id,
+                "state_signature": state_signature,
                 "capture_version": capture_version,
             })
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 
-    @PromptServer.instance.routes.get("/vnccs/pose_captures/{capture_id}")
+    @PromptServer.instance.routes.get("/vnccs/pose_captures/{state_signature}")
     async def jakkanna_pose_captures_get(request):
-        capture_id = _jakkanna_safe_id(request.match_info["capture_id"], "capture")
-        entry = _jakkanna_get_capture_cache(capture_id)
+        entry = _jakkanna_get_capture_cache(request.match_info["state_signature"])
         if not entry:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response(entry)

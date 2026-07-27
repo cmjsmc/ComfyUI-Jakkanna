@@ -144,6 +144,9 @@ The animation controls default to 81 frames at 16 fps:
 * **REALTIME** samples at exact `1 / fps` intervals from the selected start
   time. An 81-frame sequence at 16 fps requires source animation through
   5.000 seconds; shorter clips fail instead of being stretched silently.
+* **PRESERVE** root motion retains the FBX pelvis translation on the Jakkanna
+  mannequin. Use **IN_PLACE** only when the downstream animation is
+  intentionally stationary.
 
 The bundled [Fast](workflows/Jakkanna%20Krea%202%20SCAIL%202%20Animate%20Fast.json)
 and [Production](workflows/Jakkanna%20Krea%202%20SCAIL%202%20Animate%20Production.json)
@@ -155,6 +158,25 @@ lossless FFV1 master requires ComfyUI-VideoHelperSuite 1.7.9 or newer. Model
 loaders identify the required Krea 2, SCAIL-2, SAM 3.1, text-encoder,
 CLIP-Vision, VAE, and LoRA artifacts; Jakkanna does not download those files
 when the workflow opens.
+
+To animate an existing single-human image instead of authoring the appearance
+with Krea, use the content-addressed
+[Registered Image + FBX Animation](docs/IMAGE_FBX_ANIMATION.md) tool. It fits
+the image with SAM 3D Body, retargets a compatible binary Mixamo FBX onto that
+body, renders a camera-registered driver and exact masks, and generates a
+separate hardened SCAIL-2 workflow. This is intentionally a distinct product
+path: wiring an arbitrary photograph directly into the Krea workflow would
+discard the reference/driver registration that makes the animation reliable.
+The bundled
+[Greenfield Image + FBX workflow](workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
+reduces this path to three intended controls: reference image, FBX selection,
+and customization prompt. Its preparation, retargeting, framing, validation,
+sampling, and manifests run automatically. The current animation-directory
+compatibility results are recorded in
+[the FBX input audit](docs/FBX_INPUT_AUDIT.md).
+This workflow requires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model
+files listed in the image/FBX guide, and ComfyUI-VideoHelperSuite 1.7.9 or
+newer.
 
 ### Posed Mesh Export
 
@@ -172,6 +194,22 @@ python tools/export_posed_mesh.py workflow.json \
 Use `--all` to export every pose and `--triangulate` when the downstream tool
 requires triangles. GLB export uses the `trimesh` dependency installed with
 Jakkanna.
+
+### SCAIL Turntable Asset
+
+The RealityScan Fast and Production workflows can bake their 81 SCAIL-2
+replacement frames directly onto the clean posed mannequin:
+
+```bash
+tools/run_scail_proxy_asset.sh saved-workflow.json \
+  /path/to/Jakkanna/RealityScan/fast/run_00001
+```
+
+The tool rebuilds pose 0 and its exact Pose Studio camera, rejects
+self-occluded samples, locally aligns the generated masks, and writes
+`JakkannaSCAILProxy.glb` with a 2048-pixel unlit texture. Use
+`--texture-size 512` for quick tests. RealityScan alignment is optional
+validation; unrestricted photogrammetry is not used as the asset geometry.
 
 ## Jakkanna Pose Studio
 

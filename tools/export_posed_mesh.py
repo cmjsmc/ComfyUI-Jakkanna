@@ -223,6 +223,29 @@ def _joint_dump(skeleton, world_matrices, model_rotation=None, scale=1.0):
     return joints
 
 
+def _capture_dump(data, pose, rest_vertices, scale):
+    export = data.get("export", {})
+    camera = dict(export)
+    camera.update(pose.get("cameraParams") or {})
+    center = (rest_vertices.min(axis=0) + rest_vertices.max(axis=0)) * 0.5
+    return {
+        "mesh_center": [round(float(value), 6) for value in center * scale],
+        "model_rotation_degrees": [float(value) for value in pose.get("modelRotation", (0.0, 0.0, 0.0))],
+        "capture": {
+            "width": int(camera.get("view_width", camera.get("view_size", 512))),
+            "height": int(camera.get("view_height", camera.get("view_size", 512))),
+            "offset_x": float(camera.get("offset_x", camera.get("cam_offset_x", 0.0))) * scale,
+            "offset_y": float(camera.get("offset_y", camera.get("cam_offset_y", 0.0))) * scale,
+            "yaw_degrees": float(camera.get("yaw_deg", camera.get("cam_yaw_deg", 0.0))),
+            "pitch_degrees": float(camera.get("pitch_deg", camera.get("cam_pitch_deg", 0.0))),
+            "distance": 45.0 * scale,
+            "fov_degrees": 30.0,
+            "zoom": float(camera.get("zoom", camera.get("cam_zoom", 1.0))),
+            "sam_projection": bool(export.get("samApplyCamera", False)),
+        },
+    }
+
+
 def _write_obj(path, vertices, texcoords, v_faces, vt_faces):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("# Jakkanna posed mannequin export\n")
@@ -243,6 +266,7 @@ def _write_glb(path, vertices, texcoords, v_faces, vt_faces):
     # Split vertices per unique (position, uv) pair so texture seams survive.
     corner_lookup = {}
     split_vertices = []
+    split_sources = []
     split_uvs = []
     triangles = []
     for v_face, vt_face in zip(v_faces, vt_faces):
@@ -254,6 +278,7 @@ def _write_glb(path, vertices, texcoords, v_faces, vt_faces):
                 corner = len(split_vertices)
                 corner_lookup[key] = corner
                 split_vertices.append(vertices[v_index])
+                split_sources.append(v_index)
                 split_uvs.append(texcoords[vt_index])
             corners.append(corner)
         for i in range(1, len(corners) - 1):
@@ -264,6 +289,20 @@ def _write_glb(path, vertices, texcoords, v_faces, vt_faces):
         visual=trimesh.visual.TextureVisuals(uv=np.asarray(split_uvs)),
         process=False,
     )
+    raw_normals = np.asarray(mesh.vertex_normals).copy()
+    smoothed_normals = raw_normals.copy()
+    groups = {}
+    for split_index, source_index in enumerate(split_sources):
+        groups.setdefault(source_index, []).append(split_index)
+    for indices in groups.values():
+        reference = raw_normals[indices[0]]
+        aligned = raw_normals[indices].copy()
+        aligned[aligned @ reference < 0] *= -1
+        normal = aligned.mean(axis=0)
+        length = np.linalg.norm(normal)
+        if length > 1e-8:
+            smoothed_normals[indices] = normal / length
+    mesh.vertex_normals = smoothed_normals
     mesh.export(path)
 
 
@@ -378,10 +417,15 @@ def main():
         if args.joints is not None:
             joints_path = joints_paths[pose_index]
             glb = out_path.suffix.lower() == ".glb"
+            scale = GLB_METERS_PER_MAKEHUMAN_UNIT if glb else 1.0
+            sidecar = _capture_dump(data, pose, rest_vertices, scale)
+            sidecar.update({
+                "units": "meters" if glb else "makehuman-decimeters",
+                "up": "Y",
+                "joints": _joint_dump(skeleton, world_matrices, model_rotation, scale),
+            })
             joints_path.write_text(
-                json.dumps({"units": "meters" if glb else "makehuman-decimeters", "up": "Y",
-                            "joints": _joint_dump(skeleton, world_matrices, model_rotation,
-                                                  GLB_METERS_PER_MAKEHUMAN_UNIT if glb else 1.0)}, indent=2),
+                json.dumps(sidecar, indent=2),
                 encoding="utf-8",
             )
             print(f"  joints -> {joints_path}")

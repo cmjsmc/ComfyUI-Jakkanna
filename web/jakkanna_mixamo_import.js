@@ -290,7 +290,7 @@ function midpoint(a, b, THREE) {
     return pointToVector3(a, THREE).add(pointToVector3(b, THREE)).multiplyScalar(0.5);
 }
 
-function buildMixamoWorldKeypoints(sourceBones, viewer) {
+function buildMixamoWorldKeypoints(sourceBones, viewer, sourcePelvisOrigin = null, preserveRootMotion = true) {
     if (!viewer?.THREE || !viewer?._getBoneWorldPositionForImport) return null;
 
     const THREE = viewer.THREE;
@@ -369,14 +369,19 @@ function buildMixamoWorldKeypoints(sourceBones, viewer) {
     const leftLegScale = scaleBetween(source.leftHip || source.pelvis, source.leftAnkle, rest.leftHip || rest.pelvis, rest.leftAnkle, torsoScale);
     const rightLegScale = scaleBetween(source.rightHip || source.pelvis, source.rightAnkle, rest.rightHip || rest.pelvis, rest.rightAnkle, torsoScale);
 
+    const sourceRootOffset = preserveRootMotion && sourcePelvisOrigin
+        ? sourceVector(sourcePelvisOrigin, source.pelvis)
+        : [0, 0, 0];
+    const worldPelvis = rest.pelvis.clone().add(transformedOffset(sourceRootOffset, torsoScale));
+    const worldNeck = scaledWorldPoint(worldPelvis, source.pelvis, source.neck, torsoScale);
     const worldKps = {
-        pelvis: rest.pelvis.clone(),
-        neck: scaledWorldPoint(rest.pelvis, source.pelvis, source.neck, torsoScale),
-        head: scaledWorldPoint(rest.neck || rest.pelvis, source.neck || source.pelvis, source.head, headScale),
-        left_shoulder: scaledWorldPoint(rest.pelvis, source.pelvis, source.leftShoulder, torsoScale),
-        right_shoulder: scaledWorldPoint(rest.pelvis, source.pelvis, source.rightShoulder, torsoScale),
-        left_hip: scaledWorldPoint(rest.pelvis, source.pelvis, source.leftHip, torsoScale),
-        right_hip: scaledWorldPoint(rest.pelvis, source.pelvis, source.rightHip, torsoScale),
+        pelvis: worldPelvis,
+        neck: worldNeck,
+        head: scaledWorldPoint(worldNeck || worldPelvis, source.neck || source.pelvis, source.head, headScale),
+        left_shoulder: scaledWorldPoint(worldPelvis, source.pelvis, source.leftShoulder, torsoScale),
+        right_shoulder: scaledWorldPoint(worldPelvis, source.pelvis, source.rightShoulder, torsoScale),
+        left_hip: scaledWorldPoint(worldPelvis, source.pelvis, source.leftHip, torsoScale),
+        right_hip: scaledWorldPoint(worldPelvis, source.pelvis, source.rightHip, torsoScale),
     };
 
     const leftUpperArmLen = worldDistance(rest.leftShoulder, rest.leftElbow);
@@ -428,6 +433,7 @@ function buildMixamoWorldKeypoints(sourceBones, viewer) {
             rightArmScale,
             leftLegScale,
             rightLegScale,
+            sourceRootOffset,
             source,
         },
     };
@@ -516,7 +522,7 @@ function clearImportedDebugFigures(viewer) {
     viewer._clearImportedFigureGroup('_kpFigureGroup');
 }
 
-function buildMixamoLegTargets(sourceBones, viewer) {
+function buildMixamoLegTargets(sourceBones, viewer, sourcePelvisOrigin = null, preserveRootMotion = true) {
     const pelvisSource = getSourceBonePoint(sourceBones, 'Hips');
     const leftHipSource = getSourceBonePoint(sourceBones, 'LeftUpLeg');
     const rightHipSource = getSourceBonePoint(sourceBones, 'RightUpLeg');
@@ -557,8 +563,14 @@ function buildMixamoLegTargets(sourceBones, viewer) {
 
     const leftLegScale = scaleBetween(leftHipSource || pelvisSource, leftAnkleSource, rest.leftHip || rest.pelvis, rest.leftFoot, 1.0);
     const rightLegScale = scaleBetween(rightHipSource || pelvisSource, rightAnkleSource, rest.rightHip || rest.pelvis, rest.rightFoot, 1.0);
-    const worldLeftHip = scaledWorldPoint(rest.pelvis, pelvisSource, leftHipSource, 1.0) || rest.leftHip;
-    const worldRightHip = scaledWorldPoint(rest.pelvis, pelvisSource, rightHipSource, 1.0) || rest.rightHip;
+    const sourceRootOffset = preserveRootMotion && sourcePelvisOrigin
+        ? sourceVector(sourcePelvisOrigin, pelvisSource)
+        : [0, 0, 0];
+    const worldPelvis = rest.pelvis.clone().add(
+        transformedOffset(sourceRootOffset, Math.min(leftLegScale, rightLegScale))
+    );
+    const worldLeftHip = scaledWorldPoint(worldPelvis, pelvisSource, leftHipSource, 1.0) || rest.leftHip;
+    const worldRightHip = scaledWorldPoint(worldPelvis, pelvisSource, rightHipSource, 1.0) || rest.rightHip;
 
     return {
         leftLeg: {
@@ -660,13 +672,23 @@ export async function importMixamoFBXAsPoses(file, viewer, options = {}) {
         originalHistory = Array.isArray(viewer.history) ? viewer.history.slice() : null;
         originalFuture = Array.isArray(viewer.future) ? viewer.future.slice() : null;
         const poses = [];
+        let sourcePelvisOrigin = null;
+        const preserveRootMotion = options.preserveRootMotion !== false;
 
         for (const sampleTime of sampleTimes) {
             mixer.setTime(sampleTime);
             root.updateMatrixWorld(true);
+            if (sourcePelvisOrigin === null) {
+                sourcePelvisOrigin = getSourceBonePoint(sourceBones, "Hips");
+            }
 
             viewer.resetPose();
-            const mixamoKeypoints = buildMixamoWorldKeypoints(sourceBones, viewer);
+            const mixamoKeypoints = buildMixamoWorldKeypoints(
+                sourceBones,
+                viewer,
+                sourcePelvisOrigin,
+                preserveRootMotion,
+            );
             if (mixamoKeypoints?.worldKps && viewer.fitMannequinToHMR2) {
                 const historySnapshot = Array.isArray(viewer.history) ? viewer.history.slice() : null;
                 const futureSnapshot = Array.isArray(viewer.future) ? viewer.future.slice() : null;
@@ -684,7 +706,12 @@ export async function importMixamoFBXAsPoses(file, viewer, options = {}) {
             }
 
             const sourceWorldRotations = buildFrameRotationMap(sourceBones, viewer.THREE);
-            const legTargets = buildMixamoLegTargets(sourceBones, viewer);
+            const legTargets = buildMixamoLegTargets(
+                sourceBones,
+                viewer,
+                sourcePelvisOrigin,
+                preserveRootMotion,
+            );
             if (!legTargets) {
                 throw new Error('The FBX skeleton is not compatible with the Mixamo bone layout.');
             }
@@ -720,6 +747,7 @@ export async function importMixamoFBXAsPoses(file, viewer, options = {}) {
                 source_start_seconds: sampleTimes[0],
                 sample_interval_seconds: sampleTimes.length > 1 ? sampleTimes[1] - sampleTimes[0] : 0,
                 timing_mode: options.timingMode || "FIT_CLIP",
+                root_motion: preserveRootMotion ? "preserved" : "in_place",
                 skeleton_profile: hasMixamoSignature(sourceBones) ? "mixamo" : "generic_fbx",
             },
         };

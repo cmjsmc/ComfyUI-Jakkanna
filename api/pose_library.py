@@ -20,6 +20,8 @@ LOCAL_USER_REPOSITORY = "local_user_poses"
 DEFAULT_CATEGORY = "Uncategorized"
 RESERVED_LIBRARY_JSON = {"repositories.user.json", "pose_library.json"}
 SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_-]+")
+SYNC_REQUEST_RE = re.compile(r"^[0-9a-f]{32}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MAX_PREVIEW_BYTES = 16 * 1024 * 1024
 MAX_SYNC_CAPTURE_CHARS = 64 * 1024 * 1024
 MAX_SYNC_CAPTURE_IMAGES = 128
@@ -1590,6 +1592,12 @@ async def upload_pose_sync(request):
         node_id = sanitize_node_id(data.get("node_id"))
         if not node_id:
             return web.json_response({"error": "No node_id"}, status=400)
+        request_id = data.get("request_id")
+        if not isinstance(request_id, str) or not SYNC_REQUEST_RE.fullmatch(request_id):
+            return web.json_response({"error": "request_id must be a lowercase UUID hex string"}, status=400)
+        state_signature = data.get("state_signature")
+        if not isinstance(state_signature, str) or not SHA256_RE.fullmatch(state_signature):
+            return web.json_response({"error": "state_signature must be a lowercase SHA-256 digest"}, status=400)
         capture_version = data.get("capture_version", 0)
         if isinstance(capture_version, bool) or not isinstance(capture_version, int) or capture_version < 0:
             return web.json_response(
@@ -1627,21 +1635,42 @@ async def upload_pose_sync(request):
                 {"error": f"lighting_prompts entries must not exceed {MAX_SYNC_PROMPT_CHARS} characters"},
                 status=413,
             )
+        openpose_keypoints = data.get("openpose_keypoints", [])
+        if not isinstance(openpose_keypoints, list):
+            return web.json_response({"error": "openpose_keypoints must be a list"}, status=400)
+        if len(openpose_keypoints) > MAX_SYNC_CAPTURE_IMAGES:
+            return web.json_response(
+                {"error": f"openpose_keypoints limit is {MAX_SYNC_CAPTURE_IMAGES}"},
+                status=413,
+            )
+        pose_data = data.get("pose_data")
+        if pose_data is not None and not isinstance(pose_data, str):
+            return web.json_response({"error": "pose_data must be a JSON string"}, status=400)
         if len(json.dumps(data, separators=(",", ":"))) > MAX_SYNC_CAPTURE_CHARS:
             return web.json_response({"error": "capture payload is too large"}, status=413)
 
         import folder_paths
         temp_dir = folder_paths.get_temp_directory()
-        # Note: we use 'debug' in the filename for backwards compatibility with the backend check
-        filepath = os.path.join(temp_dir, f"jakkanna_debug_{node_id}.json")
+        filepath = os.path.join(temp_dir, f"jakkanna_sync_{node_id}_{request_id}.json")
         temp_abs = os.path.abspath(temp_dir)
         file_abs = os.path.abspath(filepath)
         if file_abs != temp_abs and not file_abs.startswith(temp_abs + os.sep):
             return web.json_response({"error": "Invalid node_id"}, status=400)
-        
-        with open(filepath, "w") as f:
-            json.dump(data, f)
-            
+
+        fd, pending_path = tempfile.mkstemp(prefix=".jakkanna_sync_", suffix=".tmp", dir=temp_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(pending_path, filepath)
+        except Exception:
+            try:
+                os.unlink(pending_path)
+            except FileNotFoundError:
+                pass
+            raise
+
         return web.json_response({"status": "ok"})
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
