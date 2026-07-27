@@ -1,8 +1,14 @@
 import hashlib
+import importlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import textwrap
+import threading
+import types
 import unittest
 from unittest import mock
 
@@ -22,6 +28,62 @@ import render
 import run_all
 import workflow_builder
 from _env import package_version, release_identity, safe_name
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_image_fbx_node():
+    """Import the node module against stubs, so the suite runs without ComfyUI."""
+    package = sys.modules.get("ComfyUI_Jakkanna")
+    if package is None:
+        package = types.ModuleType("ComfyUI_Jakkanna")
+        package.__path__ = [str(ROOT)]
+        sys.modules[package.__name__] = package
+    nodes_package = sys.modules.get("ComfyUI_Jakkanna.nodes")
+    if nodes_package is None:
+        nodes_package = types.ModuleType("ComfyUI_Jakkanna.nodes")
+        nodes_package.__path__ = [str(ROOT / "nodes")]
+        sys.modules[nodes_package.__name__] = nodes_package
+
+    folder_paths = sys.modules.setdefault("folder_paths", types.ModuleType("folder_paths"))
+    folder_paths.get_input_directory = tempfile.gettempdir
+    folder_paths.get_temp_directory = tempfile.gettempdir
+    folder_paths.get_user_directory = tempfile.gettempdir
+    if not hasattr(folder_paths, "folder_names_and_paths"):
+        folder_paths.folder_names_and_paths = {}
+
+    comfy = sys.modules.get("comfy")
+    if comfy is None:
+        comfy = types.ModuleType("comfy")
+        comfy.__path__ = []
+        sys.modules["comfy"] = comfy
+    model_management = sys.modules.get("comfy.model_management")
+    if model_management is None:
+        model_management = types.ModuleType("comfy.model_management")
+        sys.modules["comfy.model_management"] = model_management
+        comfy.model_management = model_management
+    model_management.unload_all_models = lambda: None
+    model_management.throw_exception_if_processing_interrupted = lambda: None
+
+    utils = types.ModuleType("comfy.utils")
+
+    class ProgressBar:
+        def __init__(self, total, node_id=None):
+            self.total = total
+            self.updates = []
+
+        def update_absolute(self, value, total=None, preview=None):
+            self.updates.append((value, total))
+
+    utils.ProgressBar = ProgressBar
+    comfy.utils = utils
+    sys.modules["comfy.utils"] = utils
+
+    return importlib.import_module("ComfyUI_Jakkanna.nodes.image_fbx_animation")
+
+
+image_fbx_animation = load_image_fbx_node()
 
 
 class CameraPresetTests(unittest.TestCase):
@@ -445,6 +507,127 @@ class GreenfieldWorkflowTests(unittest.TestCase):
 
     def test_registration_floor_is_wired_into_the_prepared_track_gate(self):
         self.assertEqual(self.graph["V3"][1]["minimum_registration_iou"], 0.35)
+
+
+class PreparationChildProcessTests(unittest.TestCase):
+    """The preparation child holds its own CUDA context, so it must never outlive the node."""
+
+    def _spawn(self, body):
+        process = subprocess.Popen(
+            [sys.executable, "-c", textwrap.dedent(body)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        self.addCleanup(process.stdout.close)
+        return process
+
+    def test_terminate_stops_a_running_child(self):
+        process = self._spawn("import time; time.sleep(120)")
+        image_fbx_animation._terminate(process)
+        self.assertIsNotNone(process.poll())
+
+    def test_terminate_escalates_when_the_child_ignores_sigterm(self):
+        if os.name != "posix":
+            self.skipTest("SIGTERM handling is POSIX-specific")
+        process = self._spawn(
+            """
+            import signal, sys, time
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            print("ready", flush=True)
+            time.sleep(120)
+            """
+        )
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+
+        with mock.patch.object(image_fbx_animation, "_TERMINATE_GRACE_SECONDS", 0.5):
+            image_fbx_animation._terminate(process)
+
+        self.assertIsNotNone(process.poll())
+
+    def test_terminate_is_a_no_op_for_a_child_that_already_exited(self):
+        process = self._spawn("pass")
+        process.wait()
+        image_fbx_animation._terminate(process)
+        self.assertEqual(process.returncode, 0)
+
+
+class PreparationProgressTests(unittest.TestCase):
+    class FakeProcess:
+        """A child that emits `lines`, then either ends or keeps the pipe open."""
+
+        def __init__(self, lines, block=False):
+            self._lines = list(lines)
+            self._block = block
+            self.released = threading.Event()
+
+        @property
+        def stdout(self):
+            def generate():
+                for line in self._lines:
+                    yield line
+                if self._block:
+                    self.released.wait(30)
+            return generate()
+
+    def test_mirrors_output_and_reports_rendered_frames(self):
+        process = self.FakeProcess([
+            "=== fit_reference.py --image ...\n",
+            "[driver] clip 'dance.fbx' 6.20s\n",
+            "  frame   0/81  t= 0.000s  coverage= 8.11%\n",
+            "  frame  80/81  t= 5.000s  coverage= 9.02%\n",
+        ])
+        bar = image_fbx_animation.comfy.utils.ProgressBar(81)
+        printed = []
+        with mock.patch.object(
+            image_fbx_animation.comfy.utils, "ProgressBar", return_value=bar
+        ):
+            with mock.patch("builtins.print", lambda *a, **k: printed.append(a[0])):
+                image_fbx_animation._mirror_progress(process, 81)
+
+        # Every line reaches the log, but only the frame lines advance the bar, and the
+        # counter is 0-based on the wire.
+        self.assertEqual(len(printed), 4)
+        self.assertEqual(bar.updates, [(1, 81), (81, 81)])
+
+    def test_cancellation_is_noticed_while_the_child_is_still_talking(self):
+        process = self.FakeProcess(["  frame   0/81  t= 0.000s\n"], block=True)
+        self.addCleanup(process.released.set)
+
+        calls = []
+
+        def interrupt_on_third_poll():
+            calls.append(1)
+            if len(calls) >= 3:
+                raise KeyboardInterrupt("queue cancelled")
+
+        with mock.patch.object(
+            image_fbx_animation.comfy.model_management,
+            "throw_exception_if_processing_interrupted",
+            interrupt_on_third_poll,
+        ):
+            with mock.patch("builtins.print"):
+                with self.assertRaises(KeyboardInterrupt):
+                    image_fbx_animation._mirror_progress(process, 81)
+
+    def test_drain_always_signals_end_of_stream(self):
+        import queue as queue_module
+
+        sink = queue_module.Queue()
+        image_fbx_animation._drain(iter(["one\n", "two\n"]), sink)
+        self.assertEqual(sink.get_nowait(), "one\n")
+        self.assertEqual(sink.get_nowait(), "two\n")
+        self.assertIsNone(sink.get_nowait())
+
+        def exploding():
+            yield "one\n"
+            raise ValueError("pipe closed under us")
+
+        sink = queue_module.Queue()
+        image_fbx_animation._drain(exploding(), sink)
+        self.assertEqual(sink.get_nowait(), "one\n")
+        self.assertIsNone(sink.get_nowait())
 
 
 if __name__ == "__main__":

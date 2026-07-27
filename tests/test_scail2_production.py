@@ -1,10 +1,12 @@
 import json
 import importlib
 import os
+import shutil
 import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -31,6 +33,7 @@ def load_scail2_production_module():
     folder_paths = types.ModuleType("folder_paths")
     folder_paths.folder_names_and_paths = {}
     folder_paths.get_temp_directory = tempfile.gettempdir
+    folder_paths.get_user_directory = tempfile.gettempdir
     sys.modules["folder_paths"] = folder_paths
 
     comfy = types.ModuleType("comfy")
@@ -441,6 +444,70 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.1,
                 0.01,
             )
+
+
+class ModelHashCacheTests(unittest.TestCase):
+    """Hashing the manifest's model set costs tens of gigabytes of reads; the cache
+    that avoids it has to survive a restart."""
+
+    def _sandbox(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        user_dir = os.path.join(home, "user")
+        temp_dir = os.path.join(home, "temp")
+        os.makedirs(user_dir)
+        os.makedirs(temp_dir)
+        weights = os.path.join(home, "model.safetensors")
+        with open(weights, "wb") as handle:
+            handle.write(b"pretend weights")
+        # Patch the module object the node itself holds: another test module installs
+        # its own folder_paths stub into sys.modules, so the registry is not reliable.
+        folder_paths = scail2_production.folder_paths
+        patches = (
+            mock.patch.object(folder_paths, "get_user_directory", lambda: user_dir, create=True),
+            mock.patch.object(folder_paths, "get_temp_directory", lambda: temp_dir, create=True),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        return user_dir, temp_dir, weights
+
+    def test_cache_is_not_kept_in_the_directory_comfyui_wipes(self):
+        user_dir, temp_dir, weights = self._sandbox()
+
+        digest = scail2_production._hash_file_cached(weights)
+        cache_path = scail2_production._hash_cache_path()
+        self.assertTrue(cache_path.is_file())
+        self.assertEqual(Path(user_dir), Path(os.path.commonpath([user_dir, cache_path])))
+        self.assertNotIn(Path(temp_dir), cache_path.parents)
+
+        # main.py rmtrees the temp directory on both startup and shutdown.
+        shutil.rmtree(temp_dir)
+        self.assertTrue(cache_path.is_file())
+
+        with mock.patch.object(
+            scail2_production,
+            "_hash_file",
+            side_effect=AssertionError("re-read a model whose hash was already cached"),
+        ):
+            self.assertEqual(scail2_production._hash_file_cached(weights), digest)
+
+    def test_cache_entry_is_rejected_when_the_file_changes(self):
+        _user_dir, _temp_dir, weights = self._sandbox()
+        first = scail2_production._hash_file_cached(weights)
+
+        with open(weights, "wb") as handle:
+            handle.write(b"different weights entirely")
+        second = scail2_production._hash_file_cached(weights)
+
+        self.assertNotEqual(first, second)
+
+    def test_cache_directory_is_created_on_demand(self):
+        user_dir, _temp_dir, weights = self._sandbox()
+        shutil.rmtree(user_dir)
+
+        scail2_production._hash_file_cached(weights)
+        self.assertTrue(scail2_production._hash_cache_path().is_file())
 
 
 class ManifestHelperTests(unittest.TestCase):

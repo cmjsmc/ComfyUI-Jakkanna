@@ -34,6 +34,11 @@ the workflow fits the subject, prepares or reuses a content-addressed driver,
 validates registration and animation continuity, and generates the review MP4,
 lossless master, reference, and production manifest.
 
+Preparation runs as a separate process that loads SAM 3D Body into a CUDA
+context of its own, so the first queue on a new image takes minutes. The node
+reports the driver render as node progress, and cancelling the queue stops the
+child rather than leaving it holding the GPU.
+
 Describe any important clothing, footwear, or anatomy that is hidden or outside
 the photograph. Those details cannot be recovered from pixels that are not
 present.
@@ -238,3 +243,9 @@ for the model to synthesize.
 
 The ComfyUI production manifest embeds this report and rejects source or mask
 tensors that no longer match it.
+
+With `hash_model_files` enabled the manifest also records a SHA-256 for every
+loaded model, which is tens of gigabytes of reads. Those digests are cached by
+path, size, and mtime in `ComfyUI/user/jakkanna/scail2_model_hash_cache.json`
+so the cost is paid once per model file rather than once per ComfyUI restart.
+Delete that file to force a re-hash.

@@ -55,14 +55,23 @@ def _hash_file(path):
     return digest.hexdigest()
 
 
-_HASH_CACHE_PATH = Path(folder_paths.get_temp_directory()) / "jakkanna_scail2_model_hash_cache.json"
+def _hash_cache_path():
+    """Where the model-weight hash cache lives.
+
+    Deliberately not ComfyUI's temp directory: main.py rmtrees that on both startup
+    and shutdown, so a cache kept there is always cold and the manifest re-reads every
+    model file — tens of gigabytes — at the end of the first generation after each
+    restart. The user directory survives restarts and is not part of any checkout.
+    """
+    return Path(folder_paths.get_user_directory()) / "jakkanna" / "scail2_model_hash_cache.json"
 
 
 def _hash_file_cached(path):
     path = os.path.realpath(path)
     stat = os.stat(path)
+    cache_path = _hash_cache_path()
     try:
-        cache = json.loads(_HASH_CACHE_PATH.read_text())
+        cache = json.loads(cache_path.read_text())
     except (OSError, ValueError):
         cache = {}
     entry = cache.get(path)
@@ -74,11 +83,12 @@ def _hash_file_cached(path):
         return entry["sha256"]
     digest = _hash_file(path)
     cache[path] = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": digest}
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
-        dir=_HASH_CACHE_PATH.parent,
-        prefix=f".{_HASH_CACHE_PATH.name}.",
+        dir=cache_path.parent,
+        prefix=f".{cache_path.name}.",
         suffix=".tmp",
         delete=False,
     ) as handle:
@@ -86,7 +96,7 @@ def _hash_file_cached(path):
         handle.write("\n")
         temp_path = Path(handle.name)
     try:
-        temp_path.replace(_HASH_CACHE_PATH)
+        temp_path.replace(cache_path)
     finally:
         temp_path.unlink(missing_ok=True)
     return digest
