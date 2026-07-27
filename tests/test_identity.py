@@ -158,12 +158,22 @@ class IdentityBoundaryTests(unittest.TestCase):
     def test_greenfield_workflow_uses_canonical_release_name(self):
         workflow_dir = os.path.join(ROOT, "workflows")
         canonical = "Jakkanna_Image_FBX_Animate_Greenfield.json"
-        camera_presets = "Jakkanna_Image_FBX_Animate_Camera_Presets.json"
         self.assertTrue(os.path.isfile(os.path.join(workflow_dir, canonical)))
-        self.assertTrue(os.path.isfile(os.path.join(workflow_dir, camera_presets)))
         self.assertFalse(
             os.path.exists(os.path.join(workflow_dir, "Jakkanna Image FBX Animate Greenfield.json"))
         )
+
+    def test_image_fbx_ships_exactly_one_workflow(self):
+        # A second image/FBX workflow was shipped whose executable graph was
+        # byte-identical to the greenfield one: the camera preset is a widget on
+        # JakkannaImageFBXPrepare, so it is visible from the single workflow and a
+        # sibling file adds nothing but two copies to keep in sync.
+        workflow_dir = os.path.join(ROOT, "workflows")
+        image_fbx = sorted(
+            name for name in os.listdir(workflow_dir)
+            if name.startswith("Jakkanna_Image_FBX_Animate") and name.endswith(".json")
+        )
+        self.assertEqual(image_fbx, ["Jakkanna_Image_FBX_Animate_Greenfield.json"])
 
     def test_scail2_animation_workflows_are_self_contained(self):
         filenames = (

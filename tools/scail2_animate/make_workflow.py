@@ -111,6 +111,7 @@ def workflow(
             "maximum_centroid_jump": 0.15,
             "minimum_adjacent_iou": 0.1,
             "minimum_border_margin": 0.005,
+            "minimum_registration_iou": 0.35,
         }),
 
         "W1": ("UNETLoader", {

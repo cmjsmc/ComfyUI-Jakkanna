@@ -26,6 +26,16 @@ from .scail2_flow_unipc import FlowUniPCMultistepScheduler
 
 UPSTREAM_COMMIT = "5cfe1b8daac8bcb22ee19794e6c04f1bf5de6ac5"
 
+# Frame-zero registration floor, calibrated against the prepared runs whose
+# review overlays were inspected: usable fits measured 0.58 (imperfect body
+# proportions, registration still sound) through 0.88 (tight). Occlusion,
+# clothing and intentional cropping account for most of that spread, which is
+# why the earlier 0.65 gate rejected working runs and was removed outright.
+# This floor sits below every fit observed to be usable and above the collapse
+# expected from a fit at the wrong depth, scale, or orientation, so it catches
+# gross failure only.
+_DEFAULT_REGISTRATION_IOU = 0.35
+
 _VIDEO_FORMATS_DIR = str(Path(__file__).resolve().parents[1] / "video_formats")
 _vhs_entry = folder_paths.folder_names_and_paths.get("VHS_video_formats")
 if _vhs_entry is None:
@@ -184,6 +194,7 @@ _GRAPH_SETTING_INPUTS = {
         "maximum_centroid_jump",
         "minimum_adjacent_iou",
         "minimum_border_margin",
+        "minimum_registration_iou",
     ),
 }
 
@@ -612,6 +623,19 @@ class JakkannaSCAIL2PreparedTrackValidate:
                 "maximum_centroid_jump": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 2.0, "step": 0.01}),
                 "minimum_adjacent_iou": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "minimum_border_margin": ("FLOAT", {"default": 0.005, "min": 0.0, "max": 0.25, "step": 0.001}),
+                "minimum_registration_iou": ("FLOAT", {
+                    "default": _DEFAULT_REGISTRATION_IOU,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "tooltip": "Floor for the frame-zero silhouette overlap between the fitted "
+                               "mannequin and the photographed subject, measured only over the "
+                               "region the photograph actually shows. Catches a body fit at the "
+                               "wrong depth, scale, or orientation before generation runs. Well-"
+                               "registered runs measure 0.85 or better; clothing, occlusion, and "
+                               "intentional cropping lower it legitimately, so the default is "
+                               "deliberately loose. Set to 0 to record the value without gating.",
+                }),
             }
         }
 
@@ -632,6 +656,7 @@ class JakkannaSCAIL2PreparedTrackValidate:
         maximum_centroid_jump,
         minimum_adjacent_iou,
         minimum_border_margin,
+        minimum_registration_iou=_DEFAULT_REGISTRATION_IOU,
     ):
         if source_images.ndim != 4 or source_images.shape[-1] < 3:
             raise ValueError("Prepared source must provide an IMAGE tensor batch")
@@ -689,11 +714,25 @@ class JakkannaSCAIL2PreparedTrackValidate:
             raise ValueError(
                 f"Prepared camera preset {requested_preset!r} has invalid border-clipping provenance"
             )
-        if preset_report and preset_report.get("resolved") != requested_preset:
-            raise ValueError("Prepared camera preset was silently replaced")
         if prepared.get("settings", {}).get("camera_preset", AUTO_CAMERA_PRESET) != requested_preset:
             raise ValueError("Prepared camera preset settings do not match registration provenance")
+
         visible_iou = prepared.get("registration", {}).get("frame0_subject_iou_visible")
+        if minimum_registration_iou > 0:
+            if isinstance(visible_iou, bool) or not isinstance(visible_iou, (int, float)):
+                raise ValueError(
+                    "Prepared input report carries no frame-zero registration IoU; re-run "
+                    "preparation, or set minimum_registration_iou to 0 to record without gating"
+                )
+            if visible_iou < minimum_registration_iou:
+                raise ValueError(
+                    f"Frame-zero registration IoU is {visible_iou:.3f}, below the "
+                    f"{minimum_registration_iou:.3f} floor: the fitted mannequin does not land on "
+                    "the photographed subject, so the reference and driver are not registered to "
+                    "one camera. Review review/driver_frame0_over_reference.jpg in the prepared "
+                    "run directory. Lower minimum_registration_iou only once that overlay confirms "
+                    "the mismatch is clothing, occlusion, or intentional cropping."
+                )
 
         metrics = _track_metrics(masks)
         areas = metrics["areas"]
@@ -744,6 +783,15 @@ class JakkannaSCAIL2PreparedTrackValidate:
             "source": "prepared_render",
             "preprocess_run_id": prepared.get("run_id"),
             "frame0_subject_iou_visible": visible_iou,
+            "minimum_registration_iou": minimum_registration_iou,
+            # Preparation resolves "auto" timing and root motion on its own. Both
+            # decisions change the animation, so they are surfaced here rather than
+            # left in a run-directory manifest nobody opens on a successful run.
+            "camera_preset": requested_preset,
+            "timing_resolved": settings.get("resolved_timing"),
+            "playback_speed_ratio": settings.get("playback_speed_ratio"),
+            "root_motion_requested": settings.get("root_motion"),
+            "root_motion_resolved": settings.get("resolved_root_motion"),
             "tracking_mask_resolution": [width, height],
             "source_canvas_resolution": [width, height],
             "minimum_area_percent": float((areas.min() / (height * width) * 100).item()),

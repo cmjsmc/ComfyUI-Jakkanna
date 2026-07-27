@@ -196,7 +196,17 @@ class PreparedTrackValidationTests(unittest.TestCase):
             "schema": "jakkanna.image_fbx_animation.v1",
             "run_id": "test-run",
             "registration": {"frame0_subject_iou_visible": 0.9},
-            "settings": {"frames": 3, "fps": 16.0, "width": 24, "height": 24},
+            "settings": {
+                "frames": 3,
+                "fps": 16.0,
+                "width": 24,
+                "height": 24,
+                "timing": "auto",
+                "resolved_timing": "fit_clip",
+                "playback_speed_ratio": 0.4,
+                "root_motion": "auto",
+                "resolved_root_motion": "in_place",
+            },
             "artifacts": {
                 "driver": {
                     "rgb16_sha256": scail2_production._hash_tensor(source),
@@ -216,7 +226,6 @@ class PreparedTrackValidationTests(unittest.TestCase):
         report["settings"]["camera_preset"] = preset
         report["registration"]["camera_preset"] = {
             "requested": preset,
-            "resolved": preset,
             "vertical_fraction": 0.58,
             "roll_degrees": 0.0,
             "allowed_border_clipping": allowed_edges,
@@ -286,12 +295,12 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.01,
             )
 
-    def test_registration_iou_is_diagnostic(self):
+    def test_rejects_a_body_fit_that_does_not_land_on_the_subject(self):
         source, driving_masks, registered_reference, reference_mask, report_json = self._inputs()
         report = json.loads(report_json)
         report["registration"]["frame0_subject_iou_visible"] = 0.01
 
-        _initial, track_json, frames = (
+        with self.assertRaisesRegex(ValueError, "registration IoU is 0.010"):
             scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
                 source,
                 driving_masks,
@@ -304,12 +313,64 @@ class PreparedTrackValidationTests(unittest.TestCase):
                 0.1,
                 0.01,
             )
+
+    def test_registration_floor_admits_occlusion_and_can_be_disabled(self):
+        source, driving_masks, registered_reference, reference_mask, report_json = self._inputs()
+        report = json.loads(report_json)
+        # Clothing and occlusion legitimately depress the score; the floor is
+        # loose enough that only a gross fit failure trips it.
+        report["registration"]["frame0_subject_iou_visible"] = 0.5
+
+        _initial, track_json, frames = (
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source, driving_masks, registered_reference, reference_mask,
+                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01,
+            )
+        )
+        track = json.loads(track_json)
+        self.assertEqual(track["preprocess_run_id"], "test-run")
+        self.assertEqual(track["frame0_subject_iou_visible"], 0.5)
+        self.assertEqual(track["minimum_registration_iou"], 0.35)
+        self.assertEqual(frames, 3)
+
+        report["registration"]["frame0_subject_iou_visible"] = 0.01
+        _initial, track_json, _frames = (
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source, driving_masks, registered_reference, reference_mask,
+                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01, 0.0,
+            )
+        )
+        self.assertEqual(json.loads(track_json)["frame0_subject_iou_visible"], 0.01)
+
+    def test_rejects_a_report_with_no_registration_score(self):
+        source, driving_masks, registered_reference, reference_mask, report_json = self._inputs()
+        report = json.loads(report_json)
+        del report["registration"]["frame0_subject_iou_visible"]
+
+        with self.assertRaisesRegex(ValueError, "no frame-zero registration IoU"):
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source, driving_masks, registered_reference, reference_mask,
+                3, json.dumps(report), 2.0, 0.15, 0.1, 0.01,
+            )
+
+    def test_surfaces_the_timing_and_root_motion_preparation_resolved(self):
+        source, driving_masks, registered_reference, reference_mask, report = self._inputs()
+
+        _initial, track_json, _frames = (
+            scail2_production.JakkannaSCAIL2PreparedTrackValidate().validate(
+                source, driving_masks, registered_reference, reference_mask,
+                3, report, 2.0, 0.15, 0.1, 0.01,
+            )
         )
 
         track = json.loads(track_json)
-        self.assertEqual(track["preprocess_run_id"], "test-run")
-        self.assertEqual(track["frame0_subject_iou_visible"], 0.01)
-        self.assertEqual(frames, 3)
+        # Preparation was asked for "auto" and silently chose in-place motion and
+        # a stretched clip. Both decisions have to reach the operator.
+        self.assertEqual(track["root_motion_requested"], "auto")
+        self.assertEqual(track["root_motion_resolved"], "in_place")
+        self.assertEqual(track["timing_resolved"], "fit_clip")
+        self.assertEqual(track["playback_speed_ratio"], 0.4)
+        self.assertEqual(track["camera_preset"], "Auto Director")
 
     def test_medium_shot_allows_declared_bottom_and_side_clipping(self):
         source, driving_masks, registered_reference, reference_mask, report = self._inputs()

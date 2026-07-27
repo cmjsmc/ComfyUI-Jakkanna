@@ -16,7 +16,6 @@ sys.path.insert(0, str(TOOLS))
 import audit_fbx
 import build_driver
 import camera_presets
-import make_camera_preset_workflow
 import make_greenfield_workflow
 import make_workflow
 import render
@@ -418,27 +417,34 @@ class GreenfieldWorkflowTests(unittest.TestCase):
         self.assertEqual(self.graph["C1"][1]["pose_video"], ["F1", 0])
         self.assertEqual(self.graph["C1"][1]["pose_video_mask"], ["F1", 1])
 
-    def test_camera_preset_workflow_exposes_the_fourth_control(self):
-        graph = make_camera_preset_workflow.camera_preset_workflow(
+    def test_camera_preset_is_always_emitted_and_defaults_to_auto(self):
+        # The node renders camera_preset as a widget from its own INPUT_TYPES, so
+        # the control is visible whether or not the graph names it. Emitting it
+        # explicitly keeps the shipped file honest about what the user can change.
+        self.assertEqual(self.graph["F1"][1]["camera_preset"], camera_presets.AUTO_CAMERA_PRESET)
+        self.assertEqual(
+            make_greenfield_workflow.TITLES["F1"],
+            "2–3 · FBX animation and camera preset",
+        )
+        self.assertEqual(make_greenfield_workflow.TITLES["P1"], "4 · Customization prompt")
+
+    def test_camera_preset_can_be_baked_and_is_validated(self):
+        graph = make_greenfield_workflow.greenfield_workflow(
             "ref_pic/luc.jpg",
             "dance.fbx",
-            "American / Cowboy Shot",
             "preserve the subject",
             42,
-        )
-
-        self.assertEqual(
-            make_camera_preset_workflow.VISIBLE,
-            {"I1", "F1", "P1"},
-        )
-        self.assertEqual(
-            graph["F1"][1]["camera_preset"],
             "American / Cowboy Shot",
         )
-        self.assertEqual(
-            make_camera_preset_workflow.TITLES["P1"],
-            "4 · Customization prompt",
-        )
+        self.assertEqual(graph["F1"][1]["camera_preset"], "American / Cowboy Shot")
+
+        with self.assertRaisesRegex(ValueError, "Unsupported camera preset"):
+            make_greenfield_workflow.greenfield_workflow(
+                "ref_pic/luc.jpg", "dance.fbx", "", 42, "Bird's-eye View"
+            )
+
+    def test_registration_floor_is_wired_into_the_prepared_track_gate(self):
+        self.assertEqual(self.graph["V3"][1]["minimum_registration_iou"], 0.35)
 
 
 if __name__ == "__main__":

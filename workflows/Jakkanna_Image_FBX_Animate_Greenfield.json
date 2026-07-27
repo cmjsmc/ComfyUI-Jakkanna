@@ -248,7 +248,7 @@
         "dance.fbx",
         "Auto Director"
       ],
-      "title": "2 \u00b7 FBX animation"
+      "title": "2\u20133 \u00b7 FBX animation and camera preset"
     },
     {
       "id": 5,
@@ -282,7 +282,7 @@
       "widgets_values": [
         "Full-body animation of the person, preserving their face, hairstyle, clothing, colours, and identity."
       ],
-      "title": "3 \u00b7 Customization prompt"
+      "title": "4 \u00b7 Customization prompt"
     },
     {
       "id": 6,
@@ -1049,7 +1049,8 @@
         2.0,
         0.15,
         0.1,
-        0.005
+        0.005,
+        0.35
       ],
       "title": "Prepared track, palette, and provenance gate"
     },
@@ -2323,7 +2324,7 @@
         "Node name for S&R": "MarkdownNote"
       },
       "widgets_values": [
-        "# Jakkanna Greenfield Image + FBX Animation\n\nOnly three inputs are intended to be changed:\n\n1. **Reference image** \u2014 upload one high-resolution image containing one person.\n2. **FBX animation** \u2014 select a compatible file from `ComfyUI/input/animate`.\n3. **Customization prompt** \u2014 describe the finished video, especially the scene\n   and any clothing or footwear that is hidden or outside the reference frame.\n\nRequires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model files listed in\n`docs/IMAGE_FBX_ANIMATION.md`, and ComfyUI-VideoHelperSuite 1.7.9 or newer.\n\nQueue the workflow after selecting those inputs. The collapsed nodes are the\nautomatic preparation, validation, SCAIL-2 generation, and provenance pipeline;\nthey do not need adjustment.\n\nSAM 3.1 isolates the person before SAM 3D Body fitting so scene objects do not\ndistort the automatic body bounds. The same checkpoint segments the registered\nreference after fitting. No mask input or adjustment is required.\n\nShort FBX clips are automatically stretched to the 81-frame output. Clips at\nleast five seconds long retain original speed and use their first five seconds.\nRoot motion is preserved when it can be framed at a useful subject scale.\nHigh-travel clips are automatically retargeted in-place when a static preserved\ncamera would make the subject too small."
+        "# Jakkanna Greenfield Image + FBX Animation\n\nOnly four inputs are intended to be changed:\n\n1. **Reference image** \u2014 upload one high-resolution image containing one person.\n2. **FBX animation** \u2014 select a compatible file from `ComfyUI/input/animate`.\n3. **Camera preset** \u2014 choose a production-safe classic shot or Dutch roll.\n   `Auto Director` frames the whole body automatically and is the default.\n4. **Customization prompt** \u2014 describe the finished video, especially the scene\n   and any clothing or footwear that is hidden or outside the reference frame.\n\nRequires ComfyUI 0.27.0 or newer, an NVIDIA CUDA GPU, the model files listed in\n`docs/IMAGE_FBX_ANIMATION.md`, and ComfyUI-VideoHelperSuite 1.7.9 or newer.\n\nQueue the workflow after selecting those inputs. The collapsed nodes are the\nautomatic preparation, validation, SCAIL-2 generation, and provenance pipeline;\nthey do not need adjustment.\n\nSAM 3.1 isolates the person before SAM 3D Body fitting so scene objects do not\ndistort the automatic body bounds. The same checkpoint segments the registered\nreference after fitting. No mask input or adjustment is required.\n\nFull, American, medium, and close shots preserve the original view axis and\nchange only optical framing. Dutch presets add a fixed 10-degree optical-axis\nroll. Cropped shots may intentionally continue below the bottom of the canvas,\nand peripheral limbs may continue through a side edge as they would in a\nconventional close shot; top/head clearance remains active. The same fixed\ncamera transform is applied to the reference, driver, and mask for all 81\nframes.\n\nThe workflow intentionally omits high angle, low angle, profile, bird's-eye,\nworm's-eye, over-the-shoulder, and point-of-view presets. Those require\nnovel-view reconstruction or synthesis that a single reference photograph\ncannot provide reliably.\n\nShort FBX clips are automatically stretched to the 81-frame output. Clips at\nleast five seconds long retain original speed and use their first five seconds.\nRoot motion is preserved when it can be framed at a useful subject scale.\nHigh-travel clips are automatically retargeted in-place when a static preserved\ncamera would make the subject too small. Whichever timing and root-motion\npolicy preparation resolves is reported in the track report preview, along with\nthe frame-zero registration score that gates the run."
       ]
     }
   ],

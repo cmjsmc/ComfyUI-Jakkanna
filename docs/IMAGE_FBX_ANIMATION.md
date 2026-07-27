@@ -21,12 +21,13 @@ mask editing or additional user input.
 
 The bundled
 [`Jakkanna_Image_FBX_Animate_Greenfield.json`](../workflows/Jakkanna_Image_FBX_Animate_Greenfield.json)
-is the normal end-user entry point. Only three expanded controls are intended
+is the normal end-user entry point. Only four expanded controls are intended
 to be changed:
 
 1. upload or select one high-resolution single-subject image;
-2. select an FBX from `ComfyUI/input/animate`; and
-3. describe the finished animation.
+2. select an FBX from `ComfyUI/input/animate`;
+3. choose a camera preset (`Auto Director` by default); and
+4. describe the finished animation.
 
 All preparation and generation nodes are collapsed and preconfigured. Queueing
 the workflow fits the subject, prepares or reuses a content-addressed driver,
@@ -37,9 +38,9 @@ Describe any important clothing, footwear, or anatomy that is hidden or outside
 the photograph. Those details cannot be recovered from pixels that are not
 present.
 
-The sibling
-[`Jakkanna_Image_FBX_Animate_Camera_Presets.json`](../workflows/Jakkanna_Image_FBX_Animate_Camera_Presets.json)
-adds one intended control: a production-safe camera preset. The choices are:
+## Camera presets
+
+The camera preset is a production-safe shot choice. The options are:
 
 - **Auto Director** and **Classic Full Shot** for complete-body framing;
 - **American / Cowboy Shot**, **Medium Shot**, **Medium Close-Up**, and
@@ -50,8 +51,15 @@ All presets use one fixed camera for the full clip and apply the same transform
 to the registered photograph, rendered driver, and masks. Cropped presets may
 intentionally continue below the bottom edge, and peripheral limbs may
 continue through a side edge as they would in a conventional close shot.
-Top/head canvas clearance remains mandatory. An explicit selection is recorded
-in cache identity and provenance and is never silently replaced.
+Top/head canvas clearance remains mandatory. The selection is recorded in cache
+identity and provenance, and preparation never substitutes a different preset.
+
+Preparation does resolve two other choices on its own: `auto` timing stretches
+a clip shorter than five seconds across the 81 frames, and `auto` root motion
+falls back to an in-place retarget when preserving travel would frame the
+subject too small. Both decisions, together with the frame-zero registration
+score, are reported in the track report preview node on every run — check them
+before accepting a result.
 
 High angle, low angle, profile, bird's-eye, worm's-eye,
 over-the-shoulder, and point-of-view presets are intentionally omitted. A
@@ -183,6 +191,25 @@ The generated workflow uses current Jakkanna validation nodes, verifies the
 prepared mask palette and continuity, embeds the preprocessing report, hashes
 the raw source/reference tensors, and writes review, FFV1 master, reference,
 and production-manifest outputs.
+
+### Registration gate
+
+`Jakkanna SCAIL-2 Validate Prepared Track` refuses to run generation when the
+fitted mannequin does not land on the photographed subject. `minimum_registration_iou`
+(default `0.35`) is a floor on the frame-zero silhouette overlap measured over
+the region the photograph actually shows. Usable fits measure roughly 0.58 to
+0.88 — an occluded, seated, or partly cropped subject sits at the bottom of
+that range with registration still sound. A body fit at the wrong depth, scale,
+or orientation collapses far below the floor, which is where a run should stop
+rather than spend a full 81-frame generation.
+
+Because that spread is wide, the default is deliberately loose: an earlier
+0.65 gate rejected working runs and was removed entirely, leaving no floor at
+all. `0.35` sits below every fit observed to be usable. If
+a run trips the floor, open `review/driver_frame0_over_reference.jpg` in the
+prepared run directory first. Lower the threshold only once that overlay
+confirms the mismatch is legitimate; set it to `0` to record the score without
+gating.
 
 Submit the same graph directly with:
 
