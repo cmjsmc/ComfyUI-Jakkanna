@@ -12,15 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMFY_NODE_CHANGELOG: >-
-        Stops a bad run before it costs a generation: a tunable frame-zero
-        registration floor rejects a body fit that does not land on the
-        photographed subject, and the new Validate Sampler node reconciles the
-        sigma schedule, sampler, CFG, mode, and LoRA strengths before sampling
-        instead of after decode. Reports the timing and root-motion policies
-        preparation resolves automatically, collapses the image/FBX workflows
-        to one four-input Greenfield graph with the camera preset as its third
-        control, makes preparation cancellable with progress, and keeps the
-        model hash cache across restarts.
+        Preserves each pose's camera framing across editing, library,
+        import/export, and workflow reload operations. Batches animation
+        capture without resizing the WebGL renderer for every frame, and
+        routes Mixamo through the shared world-landmark projection with finger
+        and toe-base landmarks plus explicit incomplete-capture failures.
     steps:
       - name: Check out code
         uses: actions/checkout@v7

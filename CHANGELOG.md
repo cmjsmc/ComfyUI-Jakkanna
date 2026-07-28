@@ -1,3 +1,16 @@
+# Version 1.5.1
+## Reliable Pose Studio Camera and Mixamo Capture
+
+*   Preserved each pose's camera framing across pose switching, deletion,
+    reset, clipboard operations, library import/export, and workflow reload.
+*   Batched Pose Studio animation capture without resizing the WebGL renderer
+    for every frame.
+*   Routed Mixamo animation through the shared world-landmark projection,
+    including finger and toe-base landmarks, with explicit failures for
+    incomplete or over-limit captures.
+*   Added a Node 24 regression suite for camera-state and Mixamo projection
+    behavior.
+
 # Version 1.5.0
 ## Gates That Run Before the Work
 
