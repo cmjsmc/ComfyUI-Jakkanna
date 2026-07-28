@@ -4623,30 +4623,47 @@ export class PoseViewerCore {
         };
     }
 
-    fitCurrentPoseToSAMMeshOverlay(shoulderYOffset = 0) {
-        const worldKps = this._samMeshOverlayWorldKps;
-        if (!worldKps?.pelvis || !this.bones || !this.skinnedMesh) return false;
+    applyWorldKeypointImport(worldKps, options = {}) {
+        if (!worldKps?.pelvis || !this.bones || !this.skinnedMesh || !this.ikController) return false;
 
         const importTargets = this._buildSAM3DImportTargetsFromWorldKps(worldKps);
         if (!importTargets) return false;
 
-        this._hmr2WorldKps = worldKps;
-        this._drawHMR2Figure(worldKps);
-        this._applyImportPelvisAndTorso(worldKps, shoulderYOffset);
-        this._applySAM3DTargetIK(importTargets, {
-            normalizeLimbs: false,
-            drawNormalizedFigure: false,
+        if (options.drawFigure !== false) {
+            this._hmr2WorldKps = worldKps;
+            this._drawHMR2Figure(worldKps);
+        }
+        this._applyImportPelvisAndTorso(worldKps, options.shoulderYOffset || 0, {
+            includeHead: options.alignHead !== false,
         });
-        this._applySAM3DHeadLineRetarget(worldKps);
-        this._applySAM3DHandPointRetarget(worldKps);
-        this._applySAM3DFootPointRetarget(worldKps);
+        this._applySAM3DTargetIK(importTargets, {
+            includeSpine: options.includeSpine !== false,
+            normalizeLimbs: options.normalizeLimbs !== false,
+            drawNormalizedFigure: options.drawFigure !== false && options.drawNormalizedFigure !== false,
+        });
+
+        const alignedWorldKps = importTargets.worldKps || worldKps;
+        if (options.alignHead !== false) this._applySAM3DHeadLineRetarget(alignedWorldKps);
+        if (options.alignHands !== false) this._applySAM3DHandPointRetarget(alignedWorldKps);
+        if (options.alignFeet !== false) this._applySAM3DFootPointRetarget(alignedWorldKps);
 
         if (this.skeleton) this.skeleton.update();
         this.skinnedMesh.updateMatrixWorld(true);
-        this.updateMarkers();
+        this.updateIKEffectorPositions?.();
+        if (options.updateMarkers !== false) this.updateMarkers();
         this.requestRender();
-        this.dispatchPoseChange();
+        if (options.dispatchPoseChange !== false) this.dispatchPoseChange();
         return true;
+    }
+
+    fitCurrentPoseToSAMMeshOverlay(shoulderYOffset = 0) {
+        const worldKps = this._samMeshOverlayWorldKps;
+        return this.applyWorldKeypointImport(worldKps, {
+            shoulderYOffset,
+            normalizeLimbs: false,
+            drawFigure: true,
+            drawNormalizedFigure: false,
+        });
     }
 
     _estimateCurrentModelHeight() {
