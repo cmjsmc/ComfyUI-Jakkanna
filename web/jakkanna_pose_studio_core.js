@@ -986,6 +986,7 @@ export class PoseViewerCore {
         this.isDispatching = false;
         this.queuedSyncFrame = null;
         this.cameraParams = null; // Store widget camera params explicitly
+        this._captureBatch = null;
         this.isInteractionActive = null;
         this._hoveredHandSide = null;
         this.useHandControlPopover = this.options.useHandControlPopover !== false;
@@ -4187,6 +4188,45 @@ export class PoseViewerCore {
         };
     }
 
+    beginCaptureBatch(width, height) {
+        if (!this.initialized || !this.renderer || !this.THREE) return false;
+        const targetWidth = Math.max(1, Math.round(Number(width) || 1));
+        const targetHeight = Math.max(1, Math.round(Number(height) || 1));
+        if (this._captureBatch) {
+            if (this._captureBatch.width !== targetWidth || this._captureBatch.height !== targetHeight) {
+                this.renderer.setSize(targetWidth, targetHeight, false);
+                this._captureBatch.width = targetWidth;
+                this._captureBatch.height = targetHeight;
+            }
+            return false;
+        }
+
+        const originalSize = new this.THREE.Vector2();
+        this.renderer.getSize(originalSize);
+        this._captureBatch = {
+            width: targetWidth,
+            height: targetHeight,
+            originalWidth: originalSize.x,
+            originalHeight: originalSize.y,
+            originalPixelRatio: this.renderer.getPixelRatio(),
+        };
+        this.renderer.setPixelRatio(1);
+        this.renderer.setSize(targetWidth, targetHeight, false);
+        return true;
+    }
+
+    endCaptureBatch() {
+        const batch = this._captureBatch;
+        if (!batch || !this.renderer) return;
+        this._captureBatch = null;
+        this.renderer.setPixelRatio(batch.originalPixelRatio);
+        this.renderer.setSize(batch.originalWidth, batch.originalHeight, false);
+        if (this.initialized && this.scene && this.camera) {
+            this.renderer.render(this.scene, this.camera);
+            this._needsRender = false;
+        }
+    }
+
     capture(width, height, zoom, bgColor, offsetX = 0, offsetY = 0, yawDeg = 0, pitchDeg = 0) {
         if (!this.initialized) return null;
 
@@ -4249,29 +4289,17 @@ export class PoseViewerCore {
         }
 
         let dataURL = null;
-        const oldPixelRatio = this.renderer.getPixelRatio();
+        const ownsCaptureBatch = !this._captureBatch;
 
         try {
-            // Resize renderer to output size
-            const originalSize = new this.THREE.Vector2();
-            this.renderer.getSize(originalSize);
-
-            this.renderer.setPixelRatio(1); // Force 1:1 pixel ratio for capture
-            this.renderer.setSize(width, height, false); // false = don't update style to avoid layout thrashing
-
+            this.beginCaptureBatch(width, height);
             // Render with Fixed Camera
             this.renderer.render(this.scene, this.captureCamera);
             dataURL = this.canvas.toDataURL("image/png");
-
-            // Restore renderer
-            this.renderer.setPixelRatio(oldPixelRatio);
-            this.renderer.setSize(originalSize.x, originalSize.y, true); // Update style back
-
         } catch (e) {
             console.error("Capture failed:", e);
         } finally {
             // Restore state
-            if (this.renderer.getPixelRatio() !== oldPixelRatio) this.renderer.setPixelRatio(oldPixelRatio);
             this.scene.background = oldBg;
 
             this.jointMarkers.forEach(m => m.visible = markersVisible && this._shouldMarkerBeVisible(m));
@@ -4300,8 +4328,7 @@ export class PoseViewerCore {
                 }
             }
 
-            // Re-render viewport
-            this.renderer.render(this.scene, this.camera);
+            if (ownsCaptureBatch) this.endCaptureBatch();
         }
         return dataURL;
     }
@@ -4596,30 +4623,47 @@ export class PoseViewerCore {
         };
     }
 
-    fitCurrentPoseToSAMMeshOverlay(shoulderYOffset = 0) {
-        const worldKps = this._samMeshOverlayWorldKps;
-        if (!worldKps?.pelvis || !this.bones || !this.skinnedMesh) return false;
+    applyWorldKeypointImport(worldKps, options = {}) {
+        if (!worldKps?.pelvis || !this.bones || !this.skinnedMesh || !this.ikController) return false;
 
         const importTargets = this._buildSAM3DImportTargetsFromWorldKps(worldKps);
         if (!importTargets) return false;
 
-        this._hmr2WorldKps = worldKps;
-        this._drawHMR2Figure(worldKps);
-        this._applyImportPelvisAndTorso(worldKps, shoulderYOffset);
-        this._applySAM3DTargetIK(importTargets, {
-            normalizeLimbs: false,
-            drawNormalizedFigure: false,
+        if (options.drawFigure !== false) {
+            this._hmr2WorldKps = worldKps;
+            this._drawHMR2Figure(worldKps);
+        }
+        this._applyImportPelvisAndTorso(worldKps, options.shoulderYOffset || 0, {
+            includeHead: options.alignHead !== false,
         });
-        this._applySAM3DHeadLineRetarget(worldKps);
-        this._applySAM3DHandPointRetarget(worldKps);
-        this._applySAM3DFootPointRetarget(worldKps);
+        this._applySAM3DTargetIK(importTargets, {
+            includeSpine: options.includeSpine !== false,
+            normalizeLimbs: options.normalizeLimbs !== false,
+            drawNormalizedFigure: options.drawFigure !== false && options.drawNormalizedFigure !== false,
+        });
+
+        const alignedWorldKps = importTargets.worldKps || worldKps;
+        if (options.alignHead !== false) this._applySAM3DHeadLineRetarget(alignedWorldKps);
+        if (options.alignHands !== false) this._applySAM3DHandPointRetarget(alignedWorldKps);
+        if (options.alignFeet !== false) this._applySAM3DFootPointRetarget(alignedWorldKps);
 
         if (this.skeleton) this.skeleton.update();
         this.skinnedMesh.updateMatrixWorld(true);
-        this.updateMarkers();
+        this.updateIKEffectorPositions?.();
+        if (options.updateMarkers !== false) this.updateMarkers();
         this.requestRender();
-        this.dispatchPoseChange();
+        if (options.dispatchPoseChange !== false) this.dispatchPoseChange();
         return true;
+    }
+
+    fitCurrentPoseToSAMMeshOverlay(shoulderYOffset = 0) {
+        const worldKps = this._samMeshOverlayWorldKps;
+        return this.applyWorldKeypointImport(worldKps, {
+            shoulderYOffset,
+            normalizeLimbs: false,
+            drawFigure: true,
+            drawNormalizedFigure: false,
+        });
     }
 
     _estimateCurrentModelHeight() {

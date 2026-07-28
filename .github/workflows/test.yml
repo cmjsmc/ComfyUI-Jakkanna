@@ -28,3 +28,10 @@ jobs:
           python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Run regression suite
         run: python -m unittest discover -s tests -v
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Run JavaScript regression suite
+        run: node --test tests/*.mjs
