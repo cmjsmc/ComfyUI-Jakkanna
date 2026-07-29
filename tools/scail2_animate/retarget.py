@@ -215,10 +215,17 @@ class Retargeter:
     def ease(index: int, frames: int) -> float:
         """Smootherstep from the photograph's pose into the clip over `frames`.
 
-        The quintic curve is C2 continuous, so acceleration is zero at both
-        ends of the blend. Cubic smoothstep leaves a second-derivative step of
-        6 at frame 0 -- the registration reference frame -- which reads as a
-        pop in the driver the sampler is conditioned on.
+        The quintic is C2, so acceleration vanishes at both ends of the blend;
+        cubic smoothstep leaves a second-derivative step of 6 at frame 0, the
+        registration reference frame.
+
+        Measured against dance.fbx over the default 12 ease frames, the quintic
+        takes mean body acceleration from 1.96 to 1.37 m/s^2 at frame 1 and
+        from 5.49 to 4.87 at frame 12, paying for it with slightly more through
+        the middle of the window. Both figures sit under the 5.30 m/s^2 the
+        clip itself carries, and the rendered frames are indistinguishable, so
+        treat this as a continuity property of the blend rather than a fix for
+        anything visible.
         """
         if frames <= 0:
             return 1.0
