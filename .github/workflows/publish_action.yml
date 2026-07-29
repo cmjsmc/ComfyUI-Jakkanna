@@ -12,11 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COMFY_NODE_CHANGELOG: >-
-        Preserves each pose's camera framing across editing, library,
-        import/export, and workflow reload operations. Batches animation
-        capture without resizing the WebGL renderer for every frame, and
-        routes Mixamo through the shared world-landmark projection with finger
-        and toe-base landmarks plus explicit incomplete-capture failures.
+        Points the package metadata at the repository's MIT LICENSE instead of
+        the third-party notices file and restores the OSI license classifier,
+        so this listing states the license the package ships under. Blends the
+        photograph's pose into the clip on a quintic smootherstep rather than a
+        cubic smoothstep, removing the step in acceleration at frame zero, the
+        frame the driver is registered against.
     steps:
       - name: Check out code
         uses: actions/checkout@v7
