@@ -213,11 +213,17 @@ class Retargeter:
 
     @staticmethod
     def ease(index: int, frames: int) -> float:
-        """Smoothstep from the photograph's pose into the clip over `frames`."""
+        """Smootherstep from the photograph's pose into the clip over `frames`.
+
+        The quintic curve is C2 continuous, so acceleration is zero at both
+        ends of the blend. Cubic smoothstep leaves a second-derivative step of
+        6 at frame 0 -- the registration reference frame -- which reads as a
+        pop in the driver the sampler is conditioned on.
+        """
         if frames <= 0:
             return 1.0
         u = min(1.0, index / frames)
-        return u * u * (3.0 - 2.0 * u)
+        return u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
 
     def sample_times(self, frames: int, fps: float, start: float = 0.0) -> np.ndarray:
         end = start + (frames - 1) / fps
