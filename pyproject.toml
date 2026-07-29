@@ -2,7 +2,7 @@
 name = "jakkanna"
 description = "Visual control and creative tools for ComfyUI: 3D posing, image-and-FBX animation, OpenPose, canvas editing, and model workflows."
 version = "1.5.1"
-license = {file = "THIRD_PARTY_NOTICES.md"}
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 
 dependencies = [
@@ -31,6 +31,7 @@ dependencies = [
 
 classifiers = [
     "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Environment :: GPU :: NVIDIA CUDA",
 ]

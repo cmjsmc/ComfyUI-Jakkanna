@@ -26,6 +26,7 @@ import make_greenfield_workflow
 import make_workflow
 import prune_runs
 import render
+import retarget
 import run_all
 import workflow_builder
 from _env import package_version, release_identity, safe_name
@@ -710,6 +711,36 @@ class PreparationProgressTests(unittest.TestCase):
         image_fbx_animation._drain(exploding(), sink)
         self.assertEqual(sink.get_nowait(), "one\n")
         self.assertIsNone(sink.get_nowait())
+
+
+class EaseCurveTests(unittest.TestCase):
+    """The photo-to-clip blend must start and stop without a visible pop."""
+
+    @staticmethod
+    def _second_derivative(frames, u, h=1e-4):
+        at = lambda x: retarget.Retargeter.ease(x * frames, frames)
+        return (at(u + h) - 2.0 * at(u) + at(u - h)) / (h * h)
+
+    def test_blend_pins_both_endpoints(self):
+        self.assertEqual(retarget.Retargeter.ease(0, 12), 0.0)
+        self.assertEqual(retarget.Retargeter.ease(12, 12), 1.0)
+        # Past the ease window the clip drives the body outright.
+        self.assertEqual(retarget.Retargeter.ease(80, 12), 1.0)
+        # A zero-length ease means no blend at all.
+        self.assertEqual(retarget.Retargeter.ease(0, 0), 1.0)
+
+    def test_blend_is_monotonic(self):
+        values = [retarget.Retargeter.ease(index, 12) for index in range(13)]
+        for earlier, later in zip(values, values[1:]):
+            self.assertLessEqual(earlier, later)
+
+    def test_blend_acceleration_vanishes_at_both_ends(self):
+        # Cubic smoothstep leaves |d2| == 6 here; the quintic must not. A step
+        # in acceleration at frame 0 is a pop in the driver the sampler sees.
+        self.assertAlmostEqual(self._second_derivative(12, 0.0), 0.0, places=2)
+        self.assertAlmostEqual(self._second_derivative(12, 1.0), 0.0, places=2)
+        # Still a real ease in the middle, not a straight line.
+        self.assertGreater(abs(self._second_derivative(12, 0.25)), 1.0)
 
 
 if __name__ == "__main__":
