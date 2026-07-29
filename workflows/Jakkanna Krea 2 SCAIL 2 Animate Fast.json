@@ -54,7 +54,7 @@
       "properties": {
         "Node name for S&R": "VNCCS_PoseStudio",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -98,7 +98,7 @@
       "properties": {
         "Node name for S&R": "JakkannaPromptFromList",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -740,7 +740,7 @@
       "properties": {
         "Node name for S&R": "SCAIL2ReferencePNG16Save",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -857,7 +857,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionInputValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [],
@@ -1064,7 +1064,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1243,7 +1243,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2SingleSubjectMask",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -1304,7 +1304,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2TrackValidate",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2061,7 +2061,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2UpstreamNoise",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [
@@ -2446,7 +2446,7 @@
       "properties": {
         "Node name for S&R": "JakkannaSCAIL2ProductionManifest",
         "cnr_id": "jakkanna",
-        "ver": "1.5.1",
+        "ver": "1.5.2",
         "aux_id": "teenu/ComfyUI-Jakkanna"
       },
       "widgets_values": [

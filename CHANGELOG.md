@@ -1,3 +1,15 @@
+# Version 1.5.2
+## Accurate Registry License and a Smoother Driver Blend
+
+*   Pointed the package metadata at the repository's MIT `LICENSE` instead of
+    the third-party notices file, and restored the OSI license classifier, so
+    the Registry listing states the license the package actually ships under.
+*   Blended the photograph's pose into the clip on a quintic smootherstep
+    rather than a cubic smoothstep, removing the step in acceleration at frame
+    zero — the frame the driver is registered against.
+*   Covered the ease curve with endpoint, monotonicity, and continuity
+    regressions, which it had been missing.
+
 # Version 1.5.1
 ## Reliable Pose Studio Camera and Mixamo Capture
 
