@@ -35,17 +35,17 @@ function calculateFactors(params) {
     const penisCirc = finiteNumber(params.penis_circ, 0.5);
     const penisTest = finiteNumber(params.penis_test, 0.5);
     const proportions = Math.max(0, Math.min(1, finiteNumber(params.proportions, 0.5)));
-    let african = Math.max(0, finiteNumber(params.african, 1 / 3));
-    let asian = Math.max(0, finiteNumber(params.asian, 1 / 3));
+    let african = Math.max(0, finiteNumber(params.african, 0.0));
+    let asian = Math.max(0, finiteNumber(params.asian, 0.5));
     let caucasian = params.caucasian == null
         ? Math.max(0, 1 - african - asian)
-        : Math.max(0, finiteNumber(params.caucasian, 1 / 3));
+        : Math.max(0, finiteNumber(params.caucasian, 0.5));
     let raceTotal = african + asian + caucasian;
     if (raceTotal <= 0) {
-        african = 1 / 3;
-        asian = 1 / 3;
-        caucasian = 1 - african - asian;
-        raceTotal = 1;
+        african = 0.0;
+        asian = 0.5;
+        caucasian = 0.5;
+        raceTotal = 1.0;
     }
 
     const factors = {
