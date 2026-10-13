@@ -371,10 +371,10 @@ def _jakkanna_build_update_preview_payload(data):
     penis_circ = float(data.get('penis_circ', 0.5))
     penis_test = float(data.get('penis_test', 0.5))
     proportions = float(data.get('proportions', 0.5))
-    african = float(data.get('african', 1.0 / 3))
-    asian = float(data.get('asian', 1.0 / 3))
+    african = float(data.get('african', 0.0))
+    asian = float(data.get('asian', 0.5))
     caucasian = data.get('caucasian')
-    caucasian = float(caucasian) if caucasian is not None else None
+    caucasian = float(caucasian) if caucasian is not None else 0.5
 
     from .CharacterData.mh_parser import HumanSolver
     from .nodes.pose_studio import POSE_STUDIO_CACHE
